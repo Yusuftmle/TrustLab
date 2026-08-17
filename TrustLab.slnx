@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/TrustLab.Benchmarks/TrustLab.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TrustLab.Agents/TrustLab.Agents.csproj" />
+    <Project Path="src/TrustLab.Application/TrustLab.Application.csproj" />
+    <Project Path="src/TrustLab.Domain/TrustLab.Domain.csproj" />
+    <Project Path="src/TrustLab.Guardrails/TrustLab.Guardrails.csproj" />
+    <Project Path="src/TrustLab.Infrastructure/TrustLab.Infrastructure.csproj" />
+    <Project Path="src/TrustLab.Rag/TrustLab.Rag.csproj" />
+    <Project Path="src/TrustLab.Telemetry/TrustLab.Telemetry.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TrustLab.IntegrationTests/TrustLab.IntegrationTests.csproj" />
+    <Project Path="tests/TrustLab.UnitTests/TrustLab.UnitTests.csproj" />
+  </Folder>
+</Solution>

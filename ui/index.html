@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrustLab — Bilimsel RAG & Embedding Laboratuvarı</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- ECharts & Vis.js -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+
+  <!-- Top App Bar (Fixed Header) -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="logo-icon">🔬</span>
+      <div class="logo-text">
+        <h1>TrustLab RAG & Vector Workbench</h1>
+        <span class="logo-sub">Apache ECharts 2D Projections • Vis.js Force Graph • SIMD Cosine • BM25 Matrices</span>
+      </div>
+    </div>
+    <div class="header-controls">
+      <button class="preset-btn active" onclick="loadExperimentPreset('hybrid_match')">⚡ 1: Hibrit Eşleşme</button>
+      <button class="preset-btn" onclick="loadExperimentPreset('exact_keyword')">🔤 2: Nadir Kelime (BM25)</button>
+      <button class="preset-btn" onclick="loadExperimentPreset('hallucination_trap')">🚨 3: Halüsinasyon Tuzağı</button>
+      <button class="run-btn-top" onclick="executeFullPipeline()">⚡ HESAPLA</button>
+    </div>
+  </header>
+
+  <!-- Main Viewport Workspace (TensorBoard Style Split View) -->
+  <div class="app-workspace">
+    
+    <!-- Left Sidebar: Controls, Corpus & Live Grounding (Scrollable) -->
+    <aside class="sidebar-panel">
+      
+      <!-- Input Section -->
+      <div class="side-card">
+        <div class="card-head">
+          <span class="side-tag">GİRDİ</span>
+          <h3>Arama Sorgusu & Parametreler</h3>
+        </div>
+        <div class="form-group">
+          <label>🔍 Arama Sorgusu (Query):</label>
+          <input type="text" id="queryInput" class="custom-input" value="TrustLab guardrail mimarisi sıfır halüsinasyon sağlar">
+        </div>
+        <div class="sliders-grid">
+          <div class="slider-row">
+            <label>RRF (k): <span id="rrfKVal">60</span></label>
+            <input type="range" id="rrfKRange" min="10" max="100" value="60" oninput="updateParams()">
+          </div>
+          <div class="slider-row">
+            <label>Rerank Eşiği: <span id="rerankThresholdVal">0.25</span></label>
+            <input type="range" id="rerankThresholdRange" min="0.10" max="0.80" step="0.05" value="0.25" oninput="updateParams()">
+          </div>
+          <div class="slider-row">
+            <label>Vektör Boyutu: <span id="embedDimVal">16D</span></label>
+            <input type="range" id="embedDimRange" min="8" max="32" step="8" value="16" oninput="updateParams()">
+          </div>
+        </div>
+      </div>
+
+      <!-- Corpus Section -->
+      <div class="side-card">
+        <div class="card-head">
+          <span class="side-tag">KORPUS</span>
+          <h3>Doküman Havuzu (Chunk'lar)</h3>
+        </div>
+        <textarea id="corpusInput" class="custom-textarea" rows="4">Doküman 1: TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen C# .NET 9 araştırma motorudur.
+Doküman 2: Okapi BM25 sparse arama ve SIMD Cosine Similarity vektör benzerliği Reciprocal Rank Fusion ile birleştirilir.
+Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gerekir.</textarea>
+      </div>
+
+      <!-- Live Grounding Section -->
+      <div class="side-card">
+        <div class="card-head">
+          <span class="side-tag">GUARDRAIL</span>
+          <h3>Canlı Grounding Denetimi</h3>
+        </div>
+        <div class="form-group">
+          <label>Aday Yanıtı Test Edin:</label>
+          <textarea id="candidateResponseInput" class="custom-textarea" rows="3" oninput="evaluateLiveGrounding()">TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen bir sistemdir. Kullanıcı verilerini Oracle veritabanında saklar.</textarea>
+        </div>
+        <div id="groundingVerdictBanner" class="verdict-banner-box"></div>
+        <div id="sentenceProofList" class="sentence-proofs"></div>
+      </div>
+
+    </aside>
+
+    <!-- Right Main Stage: 2x2 Scientific Visualizers (Fills Screen) -->
+    <main class="visualizers-grid">
+      
+      <!-- Chart 1: 2D Vector Space -->
+      <div class="viz-box">
+        <div class="viz-bar">
+          <span class="viz-badge">1. ECHART 2D PCA</span>
+          <h4>Vektör Uzayı & Cosine Yakınlık Haritası</h4>
+        </div>
+        <div id="vectorSpaceChart" class="chart-canvas"></div>
+      </div>
+
+      <!-- Chart 2: Interactive Vis.js Network -->
+      <div class="viz-box">
+        <div class="viz-bar">
+          <span class="viz-badge">2. VIS.JS NETWORK</span>
+          <h4>Etkileşimli Benzerlik & Çekim Ağı</h4>
+        </div>
+        <div id="similarityNetworkGraph" class="chart-canvas"></div>
+      </div>
+
+      <!-- Chart 3: TF-IDF Heatmap Matrix -->
+      <div class="viz-box">
+        <div class="viz-bar">
+          <span class="viz-badge">3. TF-IDF MATRIX</span>
+          <h4>BM25 TF-IDF Terim Frekans Matrisi</h4>
+        </div>
+        <div id="tfidfHeatmapChart" class="chart-canvas"></div>
+      </div>
+
+      <!-- Chart 4: Ranking Breakdown -->
+      <div class="viz-box">
+        <div class="viz-bar">
+          <span class="viz-badge">4. RANKING COMPARISON</span>
+          <h4>Sıralama Ayrışımı: BM25 vs Dense vs RRF</h4>
+        </div>
+        <div id="rankingComparisonChart" class="chart-canvas"></div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
