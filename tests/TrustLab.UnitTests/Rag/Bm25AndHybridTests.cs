@@ -113,4 +113,32 @@ public class Bm25AndHybridTests
         filtered.Should().HaveCount(1);
         filtered.First().Chunk.Id.Should().Be("rel_1");
     }
+
+    [Fact]
+    public async Task OnnxGpuReranker_ShouldGracefullyFallbackAndRerank()
+    {
+        // Arrange (Testing OnnxGpuReranker with fallback to heuristic engine)
+        using var gpuReranker = new OnnxGpuReranker(modelPath: "non_existent_model.onnx");
+        var relevantChunk = Chunk.Create("rel_med", "doc_med", "Amoxicillin contraindications and severe penicillin allergy shock warnings.", 0, 0, 80);
+        var noisyChunk = Chunk.Create("noise_culinary", "doc_food", "Best recipes for homemade sourdough bread baking.", 0, 0, 50);
+
+        var candidates = new List<RetrievalResult>
+        {
+            new(relevantChunk, 0.9f, "RRF", 1),
+            new(noisyChunk, 0.2f, "RRF", 2)
+        };
+
+        // Act
+        var results = await gpuReranker.RerankAsync(
+            query: "penicillin allergy amoxicillin contraindication",
+            candidates: candidates,
+            minimumRelevanceThreshold: 0.25f,
+            topK: 5);
+
+        // Assert
+        results.Should().NotBeEmpty();
+        results.First().Chunk.Id.Should().Be("rel_med");
+        results.Should().NotContain(r => r.Chunk.Id == "noise_culinary");
+    }
 }
+

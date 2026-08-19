@@ -17,3 +17,8 @@ desktop.ini
 ## Test & Benchmark logs
 TestResults/
 BenchmarkDotNet.Artifacts/
+
+## Large Model Weights
+models/*.onnx
+models/*.bin
+

@@ -152,3 +152,50 @@ Console.WriteLine($"Avg Faithfulness Score : {(totalFaithfulness / benchmarkCase
 Console.WriteLine($"Total Benchmark Time   : {totalLatencyMs} ms");
 Console.WriteLine("Benchmark Gate Status : " + (successRate >= 1.0f ? "[PASSED: 100% of defined scenarios met deterministic criteria]" : "[FAILED]"));
 Console.WriteLine("===============================================================================\n");
+
+// 5. Live NVIDIA RTX 4060 Ti ONNX Cross-Encoder GPU Benchmark
+Console.ForegroundColor = ConsoleColor.Yellow;
+Console.WriteLine("===============================================================================");
+Console.WriteLine("  NVIDIA GEFORCE RTX 4060 Ti — LIVE ONNX DIRECTML GPU BENCHMARK");
+Console.WriteLine("===============================================================================");
+Console.ResetColor();
+
+using var gpuReranker = new OnnxGpuReranker(
+    modelPath: "models/ms-marco-MiniLM-L-6-v2.onnx",
+    vocabPath: "models/vocab.txt",
+    deviceId: 0);
+
+Console.WriteLine($"GPU DirectML Acceleration Active : {gpuReranker.IsGpuAvailable}");
+Console.WriteLine($"ONNX Model Loaded               : {gpuReranker.IsModelLoaded}");
+
+var gpuCandidates = new List<RetrievalResult>
+{
+    new(Chunk.Create("gpu_c1", "d1", "Reciprocal Rank Fusion k=60 fuses sparse BM25 and dense SIMD tensor embeddings.", 0, 0, 80), 0.85f, "RRF", 1),
+    new(Chunk.Create("gpu_c2", "d2", "Amoxicillin contraindication guidelines for severe penicillin hypersensitivity shock.", 0, 0, 85), 0.70f, "RRF", 2),
+    new(Chunk.Create("gpu_c3", "d3", "Italian espresso brewing technique with 9 bar extraction pressure.", 0, 0, 60), 0.20f, "RRF", 3)
+};
+
+string gpuQuery = "penicillin allergy and amoxicillin contraindication";
+Console.WriteLine($"\nEvaluating Query : \"{gpuQuery}\" across {gpuCandidates.Count} candidate chunks on GPU...");
+
+var gpuTimer = Stopwatch.StartNew();
+var gpuResults = await gpuReranker.RerankAsync(gpuQuery, gpuCandidates, minimumRelevanceThreshold: 0.20f, topK: 3);
+gpuTimer.Stop();
+
+Console.ForegroundColor = ConsoleColor.Green;
+Console.WriteLine($"\n[+] GPU Inference Latency: {gpuTimer.Elapsed.TotalMilliseconds:F2} ms");
+Console.ResetColor();
+
+for (int idx = 0; idx < gpuResults.Count; idx++)
+{
+    var r = gpuResults[idx];
+    Console.WriteLine($" Rank {r.Rank} | Score: {r.Score:F4} | Type: {r.RetrievalType}");
+    Console.WriteLine($"   Chunk [{r.Chunk.Id}]: {r.Chunk.Content}");
+}
+
+Console.ForegroundColor = ConsoleColor.Cyan;
+Console.WriteLine("\n===============================================================================");
+Console.WriteLine("                 ALL BENCHMARKS & GPU INFERENCE COMPLETED");
+Console.WriteLine("===============================================================================\n");
+Console.ResetColor();
+
