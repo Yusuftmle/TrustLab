@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TrustLab.Domain\TrustLab.Domain.csproj" />
+    <ProjectReference Include="..\TrustLab.Application\TrustLab.Application.csproj" />
+    <ProjectReference Include="..\TrustLab.Rag\TrustLab.Rag.csproj" />
+    <ProjectReference Include="..\TrustLab.Guardrails\TrustLab.Guardrails.csproj" />
+    <ProjectReference Include="..\TrustLab.Infrastructure\TrustLab.Infrastructure.csproj" />
+    <ProjectReference Include="..\TrustLab.Telemetry\TrustLab.Telemetry.csproj" />
+    <ProjectReference Include="..\TrustLab.Agents\TrustLab.Agents.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

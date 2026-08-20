@@ -1,18 +1,22 @@
-// TrustLab Scientific RAG & Embedding Workbench (Apache ECharts + Vis.js Network)
+// TrustLab Scientific RAG Workbench & Clinical Observability Assistant
+// Integrated with C# .NET 10 API, RTX 4060 Ti GPU & Grounding Guardrails
 
 let vectorChartInstance = null;
-let heatmapChartInstance = null;
-let rankingChartInstance = null;
-let networkInstance = null;
+let triadChartInstance = null;
+let hardwareChartInstance = null;
 
-// Presets
+const API_BASE = "http://localhost:5000";
+let activeView = "lab"; // 'lab' or 'chat'
+let currentMessageTelemetry = null;
+
+// Scientific Presets for Lab Mode
 const presets = {
   hybrid_match: {
-    query: "TrustLab guardrail mimarisi sıfır halüsinasyon sağlar",
-    corpus: `Doküman 1: TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen C# .NET 9 araştırma motorudur.
-Doküman 2: Okapi BM25 sparse arama ve SIMD Cosine Similarity vektör benzerliği Reciprocal Rank Fusion ile birleştirilir.
-Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gerekir.`,
-    candidate: "TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen bir sistemdir. Kullanıcı verilerini Oracle veritabanında saklar."
+    query: "Penisilin alerjisinde hangi antibiyotik kontrendikedir?",
+    corpus: `Doküman 1: Şiddetli penisilin anafilaksi öyküsü olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir.
+Doküman 2: Alternatif olarak makrolid grubu antibiyotikler (Klaritromisin, Azitromisin) güvenle tercih edilebilir.
+Doküman 3: İtalyan mutfağında spagetti yaparken tenceredeki su kaynadıktan sonra tuz atılmalıdır.`,
+    candidate: "Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir."
   },
   exact_keyword: {
     query: "CS0234 namespace TrustLab Rag eksik assembly hatası",
@@ -22,17 +26,62 @@ Doküman 3: BM25 algoritması nadir anahtar kelimeleri ve hata kodlarını yüks
     candidate: "CS0234 hatası TrustLab Rag projesine assembly referansı eklenerek çözülür."
   },
   hallucination_trap: {
-    query: "TrustLab hangi bulut veritabanında kullanıcı şifrelerini tutar?",
-    corpus: `Doküman 1: TrustLab mimarisi tamamen in-memory vektör indeksleri ve yerel disk tabanlı BM25 depoları kullanır.
+    query: "TrustLab kullanıcı şifrelerini hangi bulut veritabanında saklar?",
+    corpus: `Doküman 1: TrustLab mimarisi tamamen yerel disk tabanlı in-memory vektör indeksleri ve BM25 depoları kullanır.
 Doküman 2: Güvenilirlik testleri için ExecutionTracer sınıfı milisaniye bazında gecikme ve token denetimi yapar.
 Doküman 3: Deterministik devre kesici, desteksiz iddialarda doğrudan güvenli fallback yanıtı üretir.`,
-    candidate: "TrustLab kullanıcı şifrelerini AWS DynamoDB ve Redis veritabanında 256-bit AES ile şifreleyerek tutar."
+    candidate: "TrustLab kullanıcı şifrelerini AWS DynamoDB ve Redis veritabanında 256-bit AES ile şifreleyerek bulutta saklar."
   }
 };
 
+// 1. Health Check for C# Backend
+async function checkApiHealth() {
+  const badge = document.getElementById('apiStatusBadge');
+  const text = document.getElementById('apiStatusText');
+  try {
+    const res = await fetch(`${API_BASE}/api/system/status`);
+    if (res.ok) {
+      const data = await res.json();
+      badge.className = "api-status-badge";
+      text.textContent = `🟢 .NET 10 | ${data.gpuDevice} | SIMD AVX`;
+      return true;
+    }
+  } catch (err) {
+    badge.className = "api-status-badge offline";
+    text.textContent = "🔴 C# API Kapalı";
+    return false;
+  }
+}
+
+// 2. View Switcher: Lab Mode vs. Clinical Chat Mode
+function switchViewMode(mode) {
+  activeView = mode;
+  const labTab = document.getElementById('tabLabMode');
+  const chatTab = document.getElementById('tabChatMode');
+  const labContainer = document.getElementById('labViewContainer');
+  const chatContainer = document.getElementById('chatViewContainer');
+
+  if (mode === 'lab') {
+    labTab.classList.add('active');
+    chatTab.classList.remove('active');
+    labContainer.style.display = 'flex';
+    chatContainer.style.display = 'none';
+    setTimeout(() => {
+      if (vectorChartInstance) vectorChartInstance.resize();
+      if (triadChartInstance) triadChartInstance.resize();
+      if (hardwareChartInstance) hardwareChartInstance.resize();
+    }, 100);
+  } else {
+    chatTab.classList.add('active');
+    labTab.classList.remove('active');
+    labContainer.style.display = 'none';
+    chatContainer.style.display = 'flex';
+  }
+}
+
 function loadExperimentPreset(presetKey) {
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  if (event && event.target) event.target.classList.add('active');
 
   const p = presets[presetKey];
   if (p) {
@@ -50,163 +99,58 @@ function updateParams() {
   executeFullPipeline();
 }
 
-// --- Mathematical Helpers ---
-function tokenize(text) {
-  if (!text) return [];
-  return text.toLowerCase().match(/\b[\w\-]{2,}\b/g) || [];
-}
-
-const StopWords = new Set(["the", "is", "at", "which", "on", "a", "an", "and", "or", "in", "with", "to", "for", "of", "as", "by", "that", "this", "it", "from", "be", "are", "was", "were", "bu", "bir", "ve", "ile", "için", "olan", "olarak", "veya", "gerekir"]);
-
-function stemWord(word) {
-  if (!word || word.length <= 3) return word;
-  let w = word.toLowerCase();
-  if (w.endsWith("ler") || w.endsWith("lar")) return w.slice(0, -3);
-  if (w.endsWith("dir") || w.endsWith("dur") || w.endsWith("tir") || w.endsWith("tur")) return w.slice(0, -3);
-  if (w.endsWith("nin") || w.endsWith("nın") || w.endsWith("den") || w.endsWith("dan")) return w.slice(0, -3);
-  if (w.endsWith("si") || w.endsWith("sı")) return w.slice(0, -2);
-  if (w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
-  return w;
-}
-
-// High-dimensional deterministic vector embedding simulation
-function generateEmbedding(text, dimensions = 16) {
-  const vec = new Float32Array(dimensions);
-  const tokens = tokenize(text);
-  
-  tokens.forEach(t => {
-    let hash = 0;
-    for (let i = 0; i < t.length; i++) {
-      hash = (hash << 5) - hash + t.charCodeAt(i);
-      hash |= 0;
-    }
-    for (let d = 0; d < dimensions; d++) {
-      const sign = (hash & (1 << (d % 16))) !== 0 ? 1.0 : -1.0;
-      vec[d] += sign * (1.0 + Math.abs(hash % 100) / 100.0);
-    }
-  });
-
-  // L2 Normalize
-  let sumSq = 0;
-  for (let i = 0; i < dimensions; i++) sumSq += vec[i] * vec[i];
-  const norm = Math.sqrt(sumSq);
-  if (norm > 1e-6) {
-    for (let i = 0; i < dimensions; i++) vec[i] /= norm;
-  }
-  return Array.from(vec);
-}
-
-function cosineSimilarity(vecA, vecB) {
-  let dot = 0;
-  for (let i = 0; i < vecA.length; i++) dot += vecA[i] * vecB[i];
-  return Math.max(0, Math.min(1.0, dot));
-}
-
-// --- Main Pipeline Execution & Visualization ---
-function executeFullPipeline() {
+// --- Lab Mode: Main Pipeline Execution ---
+async function executeFullPipeline() {
   const query = document.getElementById('queryInput').value.trim();
   const corpusRaw = document.getElementById('corpusInput').value.trim();
+  const candidate = document.getElementById('candidateResponseInput').value.trim();
   const rrfK = parseInt(document.getElementById('rrfKRange').value, 10);
   const rerankThreshold = parseFloat(document.getElementById('rerankThresholdRange').value);
   const dimensions = parseInt(document.getElementById('embedDimRange').value, 10);
 
   if (!query || !corpusRaw) return;
 
-  const docs = corpusRaw.split('\n').filter(l => l.trim().length > 0).map((content, idx) => ({
-    id: `Doc_${idx + 1}`,
-    name: content.split(':')[0] || `Doc_${idx + 1}`,
-    content: content
-  }));
-
-  // 1. Tokenize & Stems
-  const queryTokens = tokenize(query);
-  const queryStems = queryTokens.map(stemWord);
-  const queryContentStems = queryTokens.filter(t => !StopWords.has(t)).map(stemWord);
-
-  // 2. BM25 Calculation
-  const docTokensList = docs.map(d => tokenize(d.content));
-  const docStemsList = docTokensList.map(tokens => tokens.map(stemWord));
-  const nDocs = docs.length;
-  const avgdl = docTokensList.reduce((acc, curr) => acc + curr.length, 0) / Math.max(1, nDocs);
-  const k1 = 1.5;
-  const b = 0.75;
-
-  const bm25Scores = docs.map((doc, dIdx) => {
-    const docStems = docStemsList[dIdx];
-    const docLen = docStems.length;
-    let score = 0;
-
-    queryContentStems.forEach(term => {
-      const tf = docStems.filter(s => s === term).length;
-      if (tf > 0) {
-        const df = docStemsList.filter(ds => ds.includes(term)).length;
-        const idf = Math.log(1 + (nDocs - df + 0.5) / (df + 0.5));
-        const num = tf * (k1 + 1);
-        const den = tf + k1 * (1 - b + b * (docLen / avgdl));
-        score += Math.max(0, idf * (num / den));
-      }
+  try {
+    const response = await fetch(`${API_BASE}/api/lab/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: query,
+        corpus: corpusRaw,
+        candidateResponse: candidate,
+        rrfK: rrfK,
+        rerankThreshold: rerankThreshold,
+        dimensions: dimensions,
+        maxTokensPerChunk: 256,
+        overlapTokens: 32
+      })
     });
-    return { doc, score: parseFloat(score.toFixed(4)) };
-  });
 
-  // 3. Dense Cosine Vectors
-  const queryVector = generateEmbedding(query, dimensions);
-  const docVectors = docs.map(d => generateEmbedding(d.content, dimensions));
-  const denseScores = docs.map((doc, idx) => {
-    const sim = cosineSimilarity(queryVector, docVectors[idx]);
-    return { doc, vector: docVectors[idx], score: parseFloat(sim.toFixed(4)) };
-  });
-
-  // 4. Reciprocal Rank Fusion (RRF)
-  const sortedBm25 = [...bm25Scores].sort((a, b) => b.score - a.score);
-  const sortedDense = [...denseScores].sort((a, b) => b.score - a.score);
-
-  const rrfResults = docs.map(doc => {
-    const rankSparse = sortedBm25.findIndex(s => s.doc.id === doc.id) + 1;
-    const rankDense = sortedDense.findIndex(s => s.doc.id === doc.id) + 1;
-    const rrfScore = (1.0 / (rrfK + rankSparse)) + (1.0 / (rrfK + rankDense));
-    return {
-      doc,
-      rankSparse,
-      rankDense,
-      rrfScore: parseFloat(rrfScore.toFixed(5)),
-      bm25: sortedBm25.find(s => s.doc.id === doc.id).score,
-      cosine: sortedDense.find(s => s.doc.id === doc.id).score
-    };
-  }).sort((a, b) => b.rrfScore - a.rrfScore);
-
-  // 5. Cross-Encoder Reranking
-  const rerankedResults = rrfResults.map((item, idx) => {
-    const docStems = docStemsList.find((_, i) => docs[i].id === item.doc.id);
-    const matched = queryContentStems.filter(qt => docStems.includes(qt)).length;
-    const coverage = queryContentStems.length > 0 ? matched / queryContentStems.length : 0;
-    const rerankScore = (coverage * 0.55) + (item.cosine * 0.25) + ((1.0 / (idx + 1)) * 0.20);
-    const isPassed = rerankScore >= rerankThreshold;
-    return {
-      ...item,
-      coverage: parseFloat((coverage * 100).toFixed(1)),
-      rerankScore: parseFloat(rerankScore.toFixed(3)),
-      isPassed
-    };
-  }).sort((a, b) => b.rerankScore - a.rerankScore);
-
-  // --- RENDER VISUALIZATIONS ---
-  render2DVectorSpace(query, queryVector, docs, docVectors, denseScores);
-  renderForceGraph(query, docs, bm25Scores, denseScores, rrfResults);
-  renderTfidfHeatmap(queryContentStems, docs, docStemsList);
-  renderRankingComparison(rerankedResults);
-  evaluateLiveGrounding();
+    if (response.ok) {
+      const data = await response.json();
+      renderScientificLabResults(data);
+    }
+  } catch (err) {
+    console.error("Evaluation API Error:", err);
+  }
 }
 
-// --- 1. Render 2D Vector Embedding Space (PCA Projection) ---
-function render2DVectorSpace(query, queryVector, docs, docVectors, denseScores) {
+function renderScientificLabResults(data) {
+  render2DVectorSpace(data.query, data.queryVector, data.docVectors);
+  renderRagTriadChart(data.ragTriad);
+  renderHardwareAndRankingChart(data.hardwareProfiling, data.rankingMetrics);
+  renderGroundingProofExplorer(data.ragTriad.sentenceDetails, data.ragTriad.faithfulness);
+}
+
+// --- Panel 1: 2D Vector Space (PCA + L2 Distance) ---
+function render2DVectorSpace(query, queryVector, docVectors) {
   const chartDom = document.getElementById('vectorSpaceChart');
   if (!vectorChartInstance) {
     vectorChartInstance = echarts.init(chartDom);
   }
 
-  // Simple 2D PCA projection approximation (1st two principal components)
   function project2D(vec) {
+    if (!vec || vec.length === 0) return [0, 0];
     let x = 0, y = 0;
     for (let i = 0; i < vec.length; i++) {
       x += vec[i] * Math.cos((i * 2 * Math.PI) / vec.length);
@@ -216,21 +160,20 @@ function render2DVectorSpace(query, queryVector, docs, docVectors, denseScores) 
   }
 
   const queryPoint = project2D(queryVector);
-  const docPoints = docs.map((doc, idx) => {
-    const p = project2D(docVectors[idx]);
-    const sim = denseScores[idx].score;
+  const docPoints = (docVectors || []).map((dv, idx) => {
+    const p = project2D(dv.vector);
     return {
-      name: doc.name,
-      value: [p[0], p[1], sim],
-      content: doc.content
+      name: dv.documentId || `Doc ${idx + 1}`,
+      value: [p[0], p[1], dv.cosineDistance, dv.euclideanDistance],
+      content: dv.content
     };
   });
 
   const linesData = docPoints.map(dp => ({
     coords: [queryPoint, [dp.value[0], dp.value[1]]],
     lineStyle: {
-      color: dp.value[2] > 0.6 ? '#10b981' : dp.value[2] > 0.3 ? '#6366f1' : '#64748b',
-      width: Math.max(1, dp.value[2] * 4),
+      color: dp.value[2] < 0.4 ? '#10b981' : dp.value[2] < 0.7 ? '#6366f1' : '#64748b',
+      width: Math.max(1, (1.0 - dp.value[2]) * 4),
       type: 'dashed'
     }
   }));
@@ -241,13 +184,16 @@ function render2DVectorSpace(query, queryVector, docs, docVectors, denseScores) 
       trigger: 'item',
       backgroundColor: '#0c1222',
       borderColor: '#6366f1',
-      textStyle: { color: '#f8fafc', fontFamily: 'Fira Code', fontSize: 12 },
+      textStyle: { color: '#f8fafc', fontFamily: 'Fira Code', fontSize: 11 },
       formatter: function (params) {
         if (params.seriesType === 'scatter') {
           if (params.data.name === 'QUERY') {
-            return `<strong>🔍 QUERY (Sorgu)</strong><br/>Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]`;
+            return `<strong>🔍 CANLI SORGU (QUERY)</strong><br/>Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]`;
           }
-          return `<strong>📄 ${params.data.name}</strong><br/>Cosine Benzerliği: <span style="color:#10b981;font-weight:bold;">${(params.data.value[2] * 100).toFixed(1)}%</span><br/>Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]`;
+          return `<strong>📄 ${params.data.name}</strong><br/>
+                  Cosine Mesafe: <span style="color:#10b981;font-weight:bold;">${params.data.value[2]}</span><br/>
+                  Euclidean (L2): <span style="color:#06b6d4;font-weight:bold;">${params.data.value[3]}</span><br/>
+                  <span style="color:#94a3b8; font-size:10px;">${(params.data.content || '').slice(0, 60)}...</span>`;
         }
       }
     },
@@ -284,11 +230,11 @@ function render2DVectorSpace(query, queryVector, docs, docVectors, denseScores) 
       {
         name: 'Documents',
         type: 'scatter',
-        symbolSize: function (val) { return 14 + (val[2] * 18); },
+        symbolSize: function (val) { return 14 + ((1.0 - val[2]) * 16); },
         itemStyle: {
           color: function (params) {
-            const sim = params.data.value[2];
-            return sim > 0.6 ? '#10b981' : sim > 0.3 ? '#6366f1' : '#f43f5e';
+            const cosDist = params.data.value[2];
+            return cosDist < 0.4 ? '#10b981' : cosDist < 0.7 ? '#6366f1' : '#f43f5e';
           },
           shadowBlur: 10,
           shadowColor: 'rgba(99,102,241,0.5)'
@@ -310,256 +256,405 @@ function render2DVectorSpace(query, queryVector, docs, docVectors, denseScores) 
   vectorChartInstance.setOption(option);
 }
 
-// --- 2. Render Vis.js Force-Directed Interactive Graph ---
-function renderForceGraph(query, docs, bm25Scores, denseScores, rrfResults) {
-  const container = document.getElementById('similarityNetworkGraph');
-  
-  const nodes = [
-    {
-      id: 0,
-      label: "🔍 QUERY\n" + query.slice(0, 25) + "...",
-      shape: "hexagon",
-      color: { background: "#06b6d4", border: "#38bdf8" },
-      font: { color: "#ffffff", face: "Plus Jakarta Sans", size: 14, bold: true },
-      size: 35,
-      shadow: true
-    }
-  ];
-
-  const edges = [];
-
-  docs.forEach((doc, idx) => {
-    const docId = idx + 1;
-    const rrf = rrfResults.find(r => r.doc.id === doc.id);
-    const score = rrf ? rrf.rrfScore * 100 : 10;
-    const cosine = denseScores[idx].score;
-    const bm25 = bm25Scores[idx].score;
-
-    nodes.push({
-      id: docId,
-      label: `📄 ${doc.name}\nCos: ${(cosine*100).toFixed(0)}% | BM25: ${bm25}`,
-      shape: "box",
-      color: {
-        background: cosine > 0.5 ? "#1e293b" : "#0f172a",
-        border: cosine > 0.5 ? "#10b981" : "#6366f1"
-      },
-      font: { color: "#e2e8f0", face: "Fira Code", size: 12 },
-      margin: 10,
-      shadow: true
-    });
-
-    edges.push({
-      from: 0,
-      to: docId,
-      value: Math.max(1, (cosine * 10) + (bm25 > 0 ? 3 : 0)),
-      color: { color: cosine > 0.5 ? "#10b981" : "#6366f1", highlight: "#06b6d4" },
-      arrows: "to",
-      dashes: cosine < 0.2,
-      smooth: { type: "continuous" }
-    });
-  });
-
-  const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
-  const options = {
-    physics: {
-      stabilization: false,
-      barnesHut: { gravitationalConstant: -3000, springConstant: 0.04, springLength: 140 }
-    },
-    interaction: {
-      hover: true,
-      tooltipDelay: 100,
-      zoomView: false, // Sayfa scroll'unun yakalanmasını ve takılmasını engeller
-      dragView: true
-    }
-  };
-
-  if (networkInstance) {
-    networkInstance.setData(data);
-  } else {
-    networkInstance = new vis.Network(container, data, options);
-  }
-}
-
-// --- 3. Render TF-IDF Heatmap Matrix (Apache ECharts) ---
-function renderTfidfHeatmap(queryTerms, docs, docStemsList) {
-  const chartDom = document.getElementById('tfidfHeatmapChart');
-  if (!heatmapChartInstance) {
-    heatmapChartInstance = echarts.init(chartDom);
+// --- Panel 2: RAG Triad Radar ---
+function renderRagTriadChart(ragTriad) {
+  const chartDom = document.getElementById('ragTriadChart');
+  if (!triadChartInstance) {
+    triadChartInstance = echarts.init(chartDom);
   }
 
-  const terms = queryTerms.length > 0 ? queryTerms : ["query_stem"];
-  const docNames = docs.map(d => d.name);
-  const data = [];
-
-  terms.forEach((term, tIdx) => {
-    docs.forEach((doc, dIdx) => {
-      const docStems = docStemsList[dIdx];
-      const count = docStems.filter(s => s === term).length;
-      data.push([tIdx, dIdx, count]);
-    });
-  });
-
-  const option = {
-    backgroundColor: '#060911',
-    tooltip: {
-      position: 'top',
-      backgroundColor: '#0c1222',
-      borderColor: '#6366f1',
-      textStyle: { color: '#f8fafc', fontFamily: 'Fira Code' },
-      formatter: function (p) {
-        return `Kök: <strong>${terms[p.value[0]]}</strong><br/>Doküman: <strong>${docNames[p.value[1]]}</strong><br/>Frekans (TF): <strong>${p.value[2]}</strong>`;
-      }
-    },
-    grid: { height: '65%', top: '15%', left: '15%', right: '10%' },
-    xAxis: {
-      type: 'category',
-      data: terms,
-      splitArea: { show: true },
-      axisLabel: { color: '#94a3b8', fontFamily: 'Fira Code' }
-    },
-    yAxis: {
-      type: 'category',
-      data: docNames,
-      splitArea: { show: true },
-      axisLabel: { color: '#94a3b8', fontFamily: 'Fira Code' }
-    },
-    visualMap: {
-      min: 0,
-      max: Math.max(3, ...data.map(d => d[2])),
-      calculable: true,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: '2%',
-      inRange: { color: ['#1e293b', '#6366f1', '#10b981'] },
-      textStyle: { color: '#94a3b8' }
-    },
-    series: [{
-      name: 'TF-IDF Matrix',
-      type: 'heatmap',
-      data: data,
-      label: { show: true, color: '#fff', fontFamily: 'Fira Code', fontWeight: 'bold' },
-      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' } }
-    }]
-  };
-
-  heatmapChartInstance.setOption(option);
-}
-
-// --- 4. Render Ranking Comparison Waterfall (Apache ECharts) ---
-function renderRankingComparison(rerankedResults) {
-  const chartDom = document.getElementById('rankingComparisonChart');
-  if (!rankingChartInstance) {
-    rankingChartInstance = echarts.init(chartDom);
-  }
-
-  const docNames = rerankedResults.map(r => r.doc.name);
-  const bm25Values = rerankedResults.map(r => r.bm25);
-  const cosineValues = rerankedResults.map(r => r.cosine);
-  const rerankScores = rerankedResults.map(r => r.rerankScore);
+  const cr = (ragTriad.ContextRelevancy || ragTriad.contextRelevancy || 0) * 100;
+  const ft = (ragTriad.Faithfulness || ragTriad.faithfulness || 0) * 100;
+  const ar = (ragTriad.AnswerRelevancy || ragTriad.answerRelevancy || 0) * 100;
 
   const option = {
     backgroundColor: '#060911',
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'shadow' },
       backgroundColor: '#0c1222',
-      borderColor: '#6366f1',
+      borderColor: '#06b6d4',
       textStyle: { color: '#f8fafc', fontFamily: 'Fira Code' }
     },
-    legend: {
-      data: ['BM25 Sparse Skoru', 'SIMD Cosine Benzerliği', 'Cross-Encoder Rerank Skoru'],
-      textStyle: { color: '#94a3b8' },
-      top: '5%'
+    radar: {
+      indicator: [
+        { name: `1. Context Relevancy\n(${cr.toFixed(0)}% Arama Hassasiyeti)`, max: 100 },
+        { name: `2. Faithfulness\n(${ft.toFixed(0)}% Olgusal Sadakat)`, max: 100 },
+        { name: `3. Answer Relevancy\n(${ar.toFixed(0)}% Soru-Yanıt Uyumu)`, max: 100 }
+      ],
+      shape: 'polygon',
+      splitNumber: 4,
+      axisName: { color: '#cbd5e1', fontFamily: 'Plus Jakarta Sans', fontWeight: 'bold', fontSize: 11 },
+      splitLine: { lineStyle: { color: 'rgba(99, 102, 241, 0.2)' } },
+      splitArea: { show: true, areaStyle: { color: ['rgba(6, 182, 212, 0.05)', 'rgba(99, 102, 241, 0.05)'] } },
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } }
     },
-    grid: { left: '8%', right: '8%', bottom: '10%', top: '22%', containLabel: true },
+    series: [{
+      name: 'RAG Triad Skoru',
+      type: 'radar',
+      data: [{
+        value: [cr, ft, ar],
+        name: 'RAG Triad Tri-Metric',
+        areaStyle: { color: 'rgba(6, 182, 212, 0.4)' },
+        lineStyle: { color: '#06b6d4', width: 2 },
+        itemStyle: { color: '#38bdf8' }
+      }]
+    }]
+  };
+
+  triadChartInstance.setOption(option);
+}
+
+// --- Panel 3: Hardware Profiling & Ranking ---
+function renderHardwareAndRankingChart(hw, ranking) {
+  const chartDom = document.getElementById('hardwareProfilingChart');
+  if (!hardwareChartInstance) {
+    hardwareChartInstance = echarts.init(chartDom);
+  }
+
+  const option = {
+    backgroundColor: '#060911',
+    title: {
+      text: `Top. Gecikme: ${hw.totalLatencyMs || hw.TotalLatencyMs} ms | GPU: ${hw.gpuRerankMs || hw.GpuRerankMs} ms | NDCG@3: ${ranking.ndcgAtK || ranking.NdcgAtK}`,
+      textStyle: { color: '#f59e0b', fontSize: 11, fontFamily: 'Fira Code' },
+      right: '3%',
+      top: '4%'
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: '#0c1222',
+      borderColor: '#f59e0b',
+      textStyle: { color: '#f8fafc', fontFamily: 'Fira Code' }
+    },
+    grid: { left: '15%', right: '8%', bottom: '12%', top: '20%', containLabel: true },
     xAxis: {
       type: 'value',
+      name: 'Milisaniye (ms)',
+      nameTextStyle: { color: '#64748b' },
       axisLabel: { color: '#94a3b8', fontFamily: 'Fira Code' },
       splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
     },
     yAxis: {
       type: 'category',
-      data: docNames,
-      axisLabel: { color: '#f8fafc', fontFamily: 'Fira Code', fontWeight: 'bold' }
+      data: ['Chunk & Ingest', 'BM25 Sparse', 'SIMD Dense', 'RTX 4060 Ti GPU', 'Triad Değerlendirme'],
+      axisLabel: { color: '#f8fafc', fontFamily: 'Plus Jakarta Sans', fontWeight: '600' }
     },
     series: [
       {
-        name: 'BM25 Sparse Skoru',
+        name: 'Gecikme (ms)',
         type: 'bar',
-        itemStyle: { color: '#f59e0b', borderRadius: [0, 4, 4, 0] },
-        data: bm25Values
-      },
-      {
-        name: 'SIMD Cosine Benzerliği',
-        type: 'bar',
-        itemStyle: { color: '#a855f7', borderRadius: [0, 4, 4, 0] },
-        data: cosineValues
-      },
-      {
-        name: 'Cross-Encoder Rerank Skoru',
-        type: 'bar',
-        itemStyle: { color: '#10b981', borderRadius: [0, 4, 4, 0] },
-        data: rerankScores
+        itemStyle: {
+          color: function (params) {
+            const colors = ['#6366f1', '#f59e0b', '#a855f7', '#10b981', '#06b6d4'];
+            return colors[params.dataIndex];
+          },
+          borderRadius: [0, 4, 4, 0]
+        },
+        label: {
+          show: true,
+          position: 'right',
+          formatter: '{c} ms',
+          color: '#cbd5e1',
+          fontFamily: 'Fira Code'
+        },
+        data: [
+          hw.ingestMs || hw.IngestMs || 0.1,
+          hw.bm25SearchMs || hw.Bm25SearchMs || 0.1,
+          hw.simdDenseSearchMs || hw.SimdDenseSearchMs || 0.1,
+          hw.gpuRerankMs || hw.GpuRerankMs || 0.1,
+          hw.triadEvalMs || hw.TriadEvalMs || 0.1
+        ]
       }
     ]
   };
 
-  rankingChartInstance.setOption(option);
+  hardwareChartInstance.setOption(option);
 }
 
-// --- 5. Live Grounding Inspector ---
-function evaluateLiveGrounding() {
-  const candidate = document.getElementById('candidateResponseInput').value.trim();
-  const corpus = document.getElementById('corpusInput').value.trim();
-  const banner = document.getElementById('groundingVerdictBanner');
-  const proofsList = document.getElementById('sentenceProofList');
+// --- Panel 4: Sentence-by-Sentence Grounding Proof Explorer ---
+function renderGroundingProofExplorer(sentenceDetails, overallFaithfulness) {
+  const container = document.getElementById('groundingProofExplorer');
+  if (!sentenceDetails || sentenceDetails.length === 0) {
+    container.innerHTML = `<div style="text-align:center; color:#64748b; padding:2rem;">Aday yanıt girildiğinde cümle bazlı kanıtlar burada listelenir.</div>`;
+    return;
+  }
 
-  if (!candidate || !corpus) return;
+  let html = '';
+  sentenceDetails.forEach(s => {
+    const isGrounded = s.isGrounded !== undefined ? s.isGrounded : s.IsGrounded;
+    const sentence = s.sentence || s.Sentence;
+    const support = s.supportRatio || s.SupportRatio;
+    const docId = s.bestMatchingDocId || s.BestMatchingDocId;
+    const snippet = s.bestMatchingSnippet || s.BestMatchingSnippet;
+    const idx = s.sentenceIndex || s.SentenceIndex;
 
-  const corpusStems = tokenize(corpus).filter(t => !StopWords.has(t)).map(stemWord);
-  const sentences = candidate.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
-
-  let groundedCount = 0;
-  let proofsHtml = '';
-
-  sentences.forEach((sentence, idx) => {
-    const sStems = tokenize(sentence).filter(t => !StopWords.has(t)).map(stemWord);
-    const matched = sStems.filter(s => corpusStems.includes(s));
-    const ratio = sStems.length > 0 ? matched.length / sStems.length : 1.0;
-    const isGrounded = ratio >= 0.50;
-
-    if (isGrounded) groundedCount++;
-
-    proofsHtml += `
-      <div class="proof-item ${isGrounded ? 'grounded' : 'ungrounded'}">
-        <div class="proof-claim">Cümle ${idx + 1}: "${sentence}"</div>
-        <div class="proof-support">
-          <span>Kanıt Eşleşmesi: ${matched.length}/${sStems.length} kavram (${(ratio*100).toFixed(0)}%)</span>
+    html += `
+      <div class="proof-card ${isGrounded ? 'grounded' : 'ungrounded'}">
+        <div class="proof-header">
+          <span class="proof-title">Cümle ${idx}</span>
           <span class="proof-tag ${isGrounded ? 'green' : 'red'}">${isGrounded ? '✅ DOĞRULANDI' : '⚠️ HALÜSİNASYON'}</span>
+        </div>
+        <div class="proof-body">"${sentence}"</div>
+        <div class="proof-meta">
+          <span>Kanıt Desteği: <strong>${(support * 100).toFixed(0)}%</strong></span>
+          ${docId ? `<span>Kaynak: <span class="source-tag">${docId}</span> (${snippet})</span>` : `<span>Kaynak: <span style="color:#f43f5e;">Eşleşen Doküman Yok</span></span>`}
         </div>
       </div>
     `;
   });
 
-  const faithfulness = sentences.length > 0 ? (groundedCount / sentences.length) : 1.0;
-  const isPassed = faithfulness >= 0.80 && groundedCount === sentences.length;
-
-  banner.className = `verdict-banner-box ${isPassed ? 'pass' : 'fail'}`;
-  banner.innerHTML = isPassed
-    ? `<span>✅ DETERMINISTIK GATE: GEÇTİ (Sadakat: ${(faithfulness*100).toFixed(0)}% - Tüm iddialar doğrulanabilir kaynakta mevcut)</span>`
-    : `<span>⚠️ DETERMINISTIK GATE: REDDEDİLDİ (Sadakat: ${(faithfulness*100).toFixed(0)}% - Kaynakta olmayan iddialar tespit edildi)</span>`;
-
-  proofsList.innerHTML = proofsHtml;
+  container.innerHTML = html;
 }
 
-// Window Resize Handler
+// ==========================================
+// 💬 CLINICAL CHAT & RAG INSPECTOR ENGINE
+// ==========================================
+
+function handleChatKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+}
+
+function sendQuickPrompt(type) {
+  const input = document.getElementById('chatInputText');
+  if (type === 'penicillin') {
+    input.value = "Penisilin alerjisi olan hastada Amoksisilin kullanılabilir mi? Alternatifi nedir?";
+  } else if (type === 'paracetamol') {
+    input.value = "Yetişkin bir hastada parasetamolün günlük maksimum dozu kaç mg'dır?";
+  } else if (type === 'hallucination_test') {
+    input.value = "Penisilin alerjisinde hastaya günde 2000mg Amoksisilin verilmesi güvenli midir?";
+  }
+  sendChatMessage();
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById('chatInputText');
+  const query = input.value.trim();
+  if (!query) return;
+
+  const stream = document.getElementById('chatMessagesStream');
+
+  // 1. Append User Message
+  const userHtml = `
+    <div class="chat-msg user-msg">
+      <div class="msg-avatar">🧑‍⚕️</div>
+      <div class="msg-bubble">
+        <div class="msg-meta">Doktor / Klinik Kullanıcı</div>
+        <div class="msg-content">${query}</div>
+      </div>
+    </div>
+  `;
+  stream.insertAdjacentHTML('beforeend', userHtml);
+  input.value = '';
+  stream.scrollTop = stream.scrollHeight;
+
+  // 2. Append AI Pending Message
+  const pendingId = `ai_msg_${Date.now()}`;
+  const aiPendingHtml = `
+    <div id="${pendingId}" class="chat-msg ai-msg">
+      <div class="msg-avatar">🤖</div>
+      <div class="msg-bubble">
+        <div class="msg-meta">Klinik AI Asistanı • RAG & Guardrail Çalışıyor...</div>
+        <div class="msg-content" style="color:#06b6d4;">⏳ Klinik dokümanlar taranıyor, GPU re-ranking ve dozaj kilidi denetleniyor...</div>
+      </div>
+    </div>
+  `;
+  stream.insertAdjacentHTML('beforeend', aiPendingHtml);
+  stream.scrollTop = stream.scrollHeight;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/chat/rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      currentMessageTelemetry = data;
+      renderAiResponseWithInlineTracing(pendingId, data);
+      updateRagInspector(data);
+    }
+  } catch (err) {
+    const aiBubble = document.getElementById(pendingId);
+    if (aiBubble) {
+      aiBubble.querySelector('.msg-content').innerHTML = `<span style="color:#f43f5e;">Bağlantı hatası: C# API'ye ulaşılamadı.</span>`;
+    }
+  }
+}
+
+function renderAiResponseWithInlineTracing(msgElemId, data) {
+  const elem = document.getElementById(msgElemId);
+  if (!elem) return;
+
+  const bubble = elem.querySelector('.msg-bubble');
+  const isBlocked = data.telemetry.guardrailStatus.includes('BLOCKED');
+
+  let formattedSentencesHtml = '';
+  (data.sentences || []).forEach(s => {
+    const isGrounded = s.isGrounded;
+    const sText = s.sentence;
+    const doc = s.bestDoc;
+    const snippet = (s.snippet || '').replace(/"/g, '&quot;');
+    const ratio = Math.round((s.supportRatio || 0) * 100);
+
+    formattedSentencesHtml += `
+      <span class="traced-sentence ${isGrounded ? 'grounded' : 'ungrounded'}"
+            onmouseenter="highlightSentenceProof('${sText.replace(/'/g, "\\'")}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})"
+            onclick="highlightSentenceProof('${sText.replace(/'/g, "\\'")}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})">
+        ${sText}
+        <small style="font-size:0.65rem; font-weight:bold; opacity:0.85;">[${isGrounded ? '✅ ' + ratio + '%' : '⚠️ Uydurma'}]</small>
+      </span>
+    `;
+  });
+
+  bubble.innerHTML = `
+    <div class="msg-meta">
+      Klinik AI Asistanı • ${isBlocked ? '<span style="color:#f43f5e;">⚠️ GÜVENLİK KİLİDİ DEVREDE</span>' : '<span style="color:#10b981;">✅ KANITLANDI</span>'}
+    </div>
+    <div class="msg-content">
+      ${formattedSentencesHtml || data.answer}
+    </div>
+  `;
+}
+
+function updateRagInspector(data) {
+  const t = data.telemetry;
+  document.getElementById('activeMessageBadge').textContent = data.messageId || 'msg_live';
+
+  // Metrics
+  document.getElementById('inspConfidence').textContent = t.retrievalConfidence.toFixed(2);
+  document.getElementById('inspRerankLift').textContent = `+${t.rerankLiftPercent.toFixed(1)}%`;
+  document.getElementById('inspContextRel').textContent = `${t.contextRelevancyPercent.toFixed(0)}%`;
+  document.getElementById('inspFaithfulness').textContent = `${t.faithfulnessPercent.toFixed(0)}%`;
+
+  // Dosage Lock
+  const dosageBox = document.getElementById('dosageLockBox');
+  const dosageTitle = document.getElementById('dosageLockTitle');
+  const dosageDesc = document.getElementById('dosageLockDesc');
+  const dosageIcon = document.getElementById('dosageLockIcon');
+
+  if (t.dosageGuard.isValid) {
+    dosageBox.className = "dosage-lock-box";
+    dosageIcon.textContent = "🛡️";
+    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ✅ DOĞRULANDI";
+    dosageTitle.style.color = "#10b981";
+    dosageDesc.textContent = t.dosageGuard.status;
+  } else {
+    dosageBox.className = "dosage-lock-box violation";
+    dosageIcon.textContent = "🚨";
+    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ⚠️ İHLAL (ENGEL)";
+    dosageTitle.style.color = "#f43f5e";
+    dosageDesc.textContent = t.dosageGuard.status;
+  }
+
+  // Hardware Profiling
+  document.getElementById('inspTotalTime').textContent = `${t.latencyMs.total} ms`;
+  document.getElementById('inspBm25Ms').textContent = `${t.latencyMs.bm25} ms`;
+  document.getElementById('inspSimdMs').textContent = `${t.latencyMs.simdVector} ms`;
+  document.getElementById('inspGpuMs').textContent = `${t.latencyMs.gpuRerank} ms`;
+
+  // Raw JSON
+  document.getElementById('rawTelemetryJson').textContent = JSON.stringify(data, null, 2);
+
+  // Default first sentence proof
+  if (data.sentences && data.sentences.length > 0) {
+    const s0 = data.sentences[0];
+    highlightSentenceProof(s0.sentence, s0.bestDoc, s0.snippet, s0.isGrounded, Math.round(s0.supportRatio * 100));
+  }
+}
+
+function highlightSentenceProof(sentence, doc, snippet, isGrounded, ratio) {
+  const container = document.getElementById('activeSentenceProofContent');
+  container.className = "proof-content-box highlight-active";
+
+  container.innerHTML = `
+    <div style="margin-bottom:0.4rem; color:${isGrounded ? '#10b981' : '#f43f5e'}; font-weight:bold;">
+      ${isGrounded ? '✅ Olgusal Desteklenen Cümle' : '⚠️ Kaynaksız / Halüsinasyon Cümlesi'} (${ratio}% Örtüşme)
+    </div>
+    <div style="font-style:italic; margin-bottom:0.6rem; color:#f8fafc;">"${sentence}"</div>
+    <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; font-size:0.7rem;">
+      <span style="color:#64748b;">Eşleşen Kaynak PDF:</span> <strong style="color:#06b6d4;">${doc}</strong><br/>
+      <span style="color:#64748b;">Doküman Paragrafı:</span> <span style="color:#cbd5e1;">"${snippet}"</span>
+    </div>
+  `;
+}
+
+// --- Stres Testi Modal Koşturucu ---
+function openBenchmarkModal() {
+  document.getElementById('benchmarkModal').style.display = 'flex';
+}
+
+function closeBenchmarkModal() {
+  document.getElementById('benchmarkModal').style.display = 'none';
+}
+
+async function runLiveBenchmark() {
+  const btn = document.getElementById('runBenchmarkBtn');
+  const tbody = document.getElementById('benchmarkCasesTbody');
+  
+  btn.disabled = true;
+  btn.textContent = "⏳ Koşturuluyor (Needle in a Haystack & GPU)...";
+  tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 2rem;"><span style="color:#06b6d4;">⚙️ 10 Çöp Doküman Arasına Gizlenmiş Tıbbi İğne Test Ediliyor...</span></td></tr>`;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/lab/stress-test`, { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      
+      document.getElementById('bmPassRate').textContent = `${data.passRate}% (${data.passedTests}/${data.totalTests})`;
+      document.getElementById('bmFaithfulness').textContent = `${data.avgFaithfulness}%`;
+      document.getElementById('bmTotalTime').textContent = `${data.totalLatencyMs} ms`;
+      document.getElementById('bmGpuSpeed').textContent = data.gpuBenchmark.isGpuActive ? `${data.gpuBenchmark.latencyMs} ms` : "CPU";
+
+      let rowsHtml = '';
+      data.testCases.forEach(tc => {
+        rowsHtml += `
+          <tr>
+            <td class="tc-id">${tc.id || tc.Id}</td>
+            <td><strong>${tc.name || tc.Name}</strong><br/><span style="color:#64748b; font-size:0.7rem;">Durum: ${tc.finalState || tc.FinalState}</span></td>
+            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">${tc.query || tc.Query}</td>
+            <td style="font-family:var(--font-mono); font-weight:bold; color:${(tc.faithfulness || tc.Faithfulness) > 0.7 ? '#10b981' : '#f43f5e'}">${((tc.faithfulness || tc.Faithfulness)*100).toFixed(0)}%</td>
+            <td style="font-family:var(--font-mono);">${tc.latencyMs || tc.LatencyMs} ms</td>
+            <td><span class="verdict-tag ${tc.passed || tc.Passed ? 'pass' : 'fail'}">${tc.verdict || tc.Verdict}</span></td>
+          </tr>
+        `;
+      });
+
+      if (data.gpuBenchmark && data.gpuBenchmark.isGpuActive) {
+        rowsHtml += `
+          <tr style="background: rgba(245, 158, 11, 0.08);">
+            <td class="tc-id">GPU-01</td>
+            <td><strong>RTX 4060 Ti DirectML GPU Re-Ranking (Needle Match)</strong><br/><span style="color:#f59e0b; font-size:0.7rem;">ONNX ms-marco-MiniLM-L-6-v2</span></td>
+            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">penicillin allergy and amoxicillin contraindication</td>
+            <td style="font-family:var(--font-mono); font-weight:bold; color:#10b981;">Skor: ${(data.gpuBenchmark.topScore*100).toFixed(1)}%</td>
+            <td style="font-family:var(--font-mono); font-weight:bold; color:#f59e0b;">${data.gpuBenchmark.latencyMs} ms</td>
+            <td><span class="verdict-tag pass">🚀 GPU ZİRVE</span></td>
+          </tr>
+        `;
+      }
+
+      tbody.innerHTML = rowsHtml;
+    }
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#f43f5e; padding: 2rem;">API Bağlantı Hatası: ${err.message}</td></tr>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⚡ TESTLERİ KOŞTUR";
+  }
+}
+
+// Window Resize
 window.addEventListener('resize', () => {
   if (vectorChartInstance) vectorChartInstance.resize();
-  if (heatmapChartInstance) heatmapChartInstance.resize();
-  if (rankingChartInstance) rankingChartInstance.resize();
+  if (triadChartInstance) triadChartInstance.resize();
+  if (hardwareChartInstance) hardwareChartInstance.resize();
 });
 
-// Initial Execute on Load
-document.addEventListener('DOMContentLoaded', () => {
+// Init
+document.addEventListener('DOMContentLoaded', async () => {
+  await checkApiHealth();
   executeFullPipeline();
 });

@@ -20,23 +20,35 @@
 
   <!-- Top App Bar (Fixed Header) -->
   <header class="app-header">
-    <div class="header-brand">
-      <span class="logo-icon">🔬</span>
-      <div class="logo-text">
-        <h1>TrustLab RAG & Vector Workbench</h1>
-        <span class="logo-sub">Apache ECharts 2D Projections • Vis.js Force Graph • SIMD Cosine • BM25 Matrices</span>
+    <div class="top-nav-left">
+      <div class="logo-box">
+        <span class="logo-icon">🛡️</span>
+        <div class="logo-text">
+          <h1>TrustLab <span class="badge-tag">RAG & CLINICAL OBSERVABILITY</span></h1>
+          <span class="sub-text">Deterministic Guardrails • Zero-Hallucination SLA • RTX 4060 Ti</span>
+        </div>
+      </div>
+      <!-- Mode Switcher -->
+      <div class="mode-tabs">
+        <button id="tabLabMode" class="mode-tab-btn active" onclick="switchViewMode('lab')">🔬 Deney Laboratuvarı</button>
+        <button id="tabChatMode" class="mode-tab-btn" onclick="switchViewMode('chat')">💬 Klinik Chat & RAG Inspector</button>
       </div>
     </div>
     <div class="header-controls">
+      <div id="apiStatusBadge" class="api-status-badge">
+        <span class="status-dot pulsing"></span>
+        <span id="apiStatusText">C# .NET API Bağlanıyor...</span>
+      </div>
+      <button class="benchmark-btn-top" onclick="openBenchmarkModal()">🧪 STRES TESTİ / LAB</button>
       <button class="preset-btn active" onclick="loadExperimentPreset('hybrid_match')">⚡ 1: Hibrit Eşleşme</button>
       <button class="preset-btn" onclick="loadExperimentPreset('exact_keyword')">🔤 2: Nadir Kelime (BM25)</button>
       <button class="preset-btn" onclick="loadExperimentPreset('hallucination_trap')">🚨 3: Halüsinasyon Tuzağı</button>
-      <button class="run-btn-top" onclick="executeFullPipeline()">⚡ HESAPLA</button>
+      <button class="run-btn-top" onclick="executeFullPipeline()">⚡ ÇALIŞTIR</button>
     </div>
   </header>
 
   <!-- Main Viewport Workspace (TensorBoard Style Split View) -->
-  <div class="app-workspace">
+  <div id="labViewContainer" class="app-workspace">
     
     <!-- Left Sidebar: Controls, Corpus & Live Grounding (Scrollable) -->
     <aside class="sidebar-panel">
@@ -81,15 +93,13 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
       <!-- Live Grounding Section -->
       <div class="side-card">
         <div class="card-head">
-          <span class="side-tag">GUARDRAIL</span>
-          <h3>Canlı Grounding Denetimi</h3>
+          <span class="side-tag">TEST YANITI</span>
+          <h3>Aday Model Yanıtı (Grounding)</h3>
         </div>
         <div class="form-group">
-          <label>Aday Yanıtı Test Edin:</label>
-          <textarea id="candidateResponseInput" class="custom-textarea" rows="3" oninput="evaluateLiveGrounding()">TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen bir sistemdir. Kullanıcı verilerini Oracle veritabanında saklar.</textarea>
+          <label>Test Edilecek Yanıt Metni:</label>
+          <textarea id="candidateResponseInput" class="custom-textarea" rows="3" oninput="executeFullPipeline()">Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.</textarea>
         </div>
-        <div id="groundingVerdictBanner" class="verdict-banner-box"></div>
-        <div id="sentenceProofList" class="sentence-proofs"></div>
       </div>
 
     </aside>
@@ -97,44 +107,222 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
     <!-- Right Main Stage: 2x2 Scientific Visualizers (Fills Screen) -->
     <main class="visualizers-grid">
       
-      <!-- Chart 1: 2D Vector Space -->
+      <!-- Chart 1: 2D Vector Space & L2 Distance -->
       <div class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge">1. ECHART 2D PCA</span>
-          <h4>Vektör Uzayı & Cosine Yakınlık Haritası</h4>
+          <span class="viz-badge">1. VEKTÖR UZAYI & L2</span>
+          <h4>Vektör Uzayı & Cosine / L2 Geometrik Haritası</h4>
         </div>
         <div id="vectorSpaceChart" class="chart-canvas"></div>
       </div>
 
-      <!-- Chart 2: Interactive Vis.js Network -->
+      <!-- Chart 2: RAG Triad Radar & Precision Bars -->
       <div class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge">2. VIS.JS NETWORK</span>
-          <h4>Etkileşimli Benzerlik & Çekim Ağı</h4>
+          <span class="viz-badge cyan">2. RAG TRIAD</span>
+          <h4>RAG Triad Metrikleri (Context Relevancy • Faithfulness • Answer Relevancy)</h4>
         </div>
-        <div id="similarityNetworkGraph" class="chart-canvas"></div>
+        <div id="ragTriadChart" class="chart-canvas"></div>
       </div>
 
-      <!-- Chart 3: TF-IDF Heatmap Matrix -->
+      <!-- Chart 3: Hardware Profiling & Ranking Metrics (NDCG, MRR, GPU Latency) -->
       <div class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge">3. TF-IDF MATRIX</span>
-          <h4>BM25 TF-IDF Terim Frekans Matrisi</h4>
+          <span class="viz-badge yellow">3. DONANIM PROFILING & NDCG</span>
+          <h4>Donanım Gecikme Dağılımı (CPU SIMD vs BM25 vs RTX 4060 Ti GPU)</h4>
         </div>
-        <div id="tfidfHeatmapChart" class="chart-canvas"></div>
+        <div id="hardwareProfilingChart" class="chart-canvas"></div>
       </div>
 
-      <!-- Chart 4: Ranking Breakdown -->
+      <!-- Chart 4: Sentence-by-Sentence Grounding Proof Explorer -->
       <div class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge">4. RANKING COMPARISON</span>
-          <h4>Sıralama Ayrışımı: BM25 vs Dense vs RRF</h4>
+          <span class="viz-badge emerald">4. KANIT & GROUNDING</span>
+          <h4>Cümle Bazlı Olgusal Kanıt & Doküman Eşleşme İnceleyicisi</h4>
         </div>
-        <div id="rankingComparisonChart" class="chart-canvas"></div>
+        <div id="groundingProofExplorer" class="chart-canvas scrollable-canvas"></div>
       </div>
 
     </main>
+  </div>
 
+  <!-- VIEW 2: Clinical Chat & RAG Inspector (Split-View Drawer) -->
+  <div id="chatViewContainer" class="clinical-chat-layout" style="display: none;">
+    
+    <!-- Left Column: Medical Assistant Chat Stream (55%) -->
+    <section class="chat-section">
+      <div class="chat-header-bar">
+        <div class="chat-status-indicator">
+          <span class="pulse-dot"></span>
+          <span><strong>Klinik Karar Destek Asistanı</strong> (Canlı RAG & Dozaj Denetimi Aktif)</span>
+        </div>
+        <div class="quick-prompts">
+          <button class="quick-btn" onclick="sendQuickPrompt('penicillin')">💊 Penisilin Kontrendikasyonu</button>
+          <button class="quick-btn" onclick="sendQuickPrompt('paracetamol')">💉 Parasetamol Dozajı</button>
+          <button class="quick-btn red-btn" onclick="sendQuickPrompt('hallucination_test')">⚠️ Halüsinasyon Tuzağı</button>
+        </div>
+      </div>
+
+      <div id="chatMessagesStream" class="chat-messages-stream">
+        <!-- Initial Welcome Message -->
+        <div class="chat-msg ai-msg">
+          <div class="msg-avatar">🤖</div>
+          <div class="msg-bubble">
+            <div class="msg-meta">Klinik AI Asistanı • Grounding Aktif</div>
+            <div class="msg-content">
+              Merhaba Doktor Bey/Hanım. Tıbbi sorularınızı yanıtlamak için hazırım. Ürettiğim her cümle arka planda <strong>RAG Inspector</strong> tarafından anlık olarak PDF prospektüslerle ve dozaj kural motoruyla denetlenmektedir. Yanıtlardaki cümlelerin üzerine tıklayarak kaynak dokümanı sağ panelde inceleyebilirsiniz.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-wrapper">
+        <div class="chat-input-box">
+          <textarea id="chatInputText" placeholder="Klinik sorunuzu yazın (Örn: Şiddetli penisilin alerjisinde hangi antibiyotik alternatiftir?)" rows="2" onkeydown="handleChatKeyDown(event)"></textarea>
+          <button id="sendChatBtn" class="send-msg-btn" onclick="sendChatMessage()">
+            <span>Gönder</span> ➔
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: RAG Inspector & Live Observability Drawer (45%) -->
+    <aside class="inspector-section">
+      <div class="inspector-header">
+        <div class="inspector-title">
+          <span class="inspector-icon">🔍</span>
+          <div>
+            <h3>RAG Observability & Inspector</h3>
+            <span class="sub-text">Mesaj Bazlı Gerçek Zamanlı Telemetri & Olgusal Doğrulama</span>
+          </div>
+        </div>
+        <span id="activeMessageBadge" class="msg-badge-tag">msg_init</span>
+      </div>
+
+      <!-- Live Metric Cards Grid -->
+      <div class="inspector-metrics-grid">
+        <div class="insp-card">
+          <span class="insp-label">RETRIEVAL CONFIDENCE</span>
+          <span id="inspConfidence" class="insp-val green">---</span>
+          <span class="insp-sub">Top-1 Re-rank Skoru</span>
+        </div>
+        <div class="insp-card">
+          <span class="insp-label">RE-RANKER LIFT</span>
+          <span id="inspRerankLift" class="insp-val cyan">---</span>
+          <span class="insp-sub">Cross-Encoder Farkı</span>
+        </div>
+        <div class="insp-card">
+          <span class="insp-label">CONTEXT RELEVANCE</span>
+          <span id="inspContextRel" class="insp-val yellow">---</span>
+          <span class="insp-sub">Arama Hassasiyeti</span>
+        </div>
+        <div class="insp-card">
+          <span class="insp-label">FAITHFULNESS (SADAKAT)</span>
+          <span id="inspFaithfulness" class="insp-val purple">---</span>
+          <span class="insp-sub">Olgusal Kanıt Oranı</span>
+        </div>
+      </div>
+
+      <!-- Dosage & Safety Status Box -->
+      <div id="dosageLockBox" class="dosage-lock-box">
+        <div class="dosage-header">
+          <span id="dosageLockIcon">🛡️</span>
+          <strong id="dosageLockTitle">Dozaj & Etken Madde Kilidi: Bekleniyor</strong>
+        </div>
+        <div id="dosageLockDesc" class="dosage-desc">Sorunuza yanıt üretildiğinde sayısal dozajlar (mg/ml) kontrol edilir.</div>
+      </div>
+
+      <!-- Active Sentence Highlighting / Source Proof Card -->
+      <div class="proof-inspection-card">
+        <div class="card-head">
+          <span class="side-tag">CANLI KANIT PARLATICISI</span>
+          <h4>Vurgulanan Cümle ve Kaynak PDF</h4>
+        </div>
+        <div id="activeSentenceProofContent" class="proof-content-box">
+          <span class="placeholder-text">Yanıttaki herhangi bir cümlenin üzerine gelin veya tıklayın; cümlenin dayandığı kaynak PDF sayfası burada parlayacaktır.</span>
+        </div>
+      </div>
+
+      <!-- Hardware Timers & DirectML GPU Footprint -->
+      <div class="hardware-footprint-card">
+        <div class="hw-mini-header">
+          <span>⚡ <strong>Donanım Profiling</strong> (NVIDIA RTX 4060 Ti DirectML)</span>
+          <span id="inspTotalTime" class="hw-total-tag">--- ms</span>
+        </div>
+        <div class="hw-mini-grid">
+          <div class="hw-pill"><span>BM25 Sparse:</span> <strong id="inspBm25Ms">0.0 ms</strong></div>
+          <div class="hw-pill"><span>SIMD Cosine:</span> <strong id="inspSimdMs">0.0 ms</strong></div>
+          <div class="hw-pill"><span>GPU Re-Rank:</span> <strong id="inspGpuMs" style="color:#f59e0b;">0.0 ms</strong></div>
+        </div>
+      </div>
+
+      <!-- Raw Telemetry Payload Drawer (Collapsible) -->
+      <details class="telemetry-json-drawer">
+        <summary>📄 Ham Telemetry Payload JSON Görüntüleyici</summary>
+        <pre id="rawTelemetryJson">{"status": "waiting_for_message"}</pre>
+      </details>
+    </aside>
+
+  </div>
+
+  <!-- Benchmark Modal Window -->
+  <div id="benchmarkModal" class="benchmark-modal-backdrop" style="display: none;">
+    <div class="benchmark-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-box">
+          <span class="lab-icon">🔬</span>
+          <div>
+            <h3>TrustLab Bilimsel RAG Stres Testi & Doğrulama Laboratuvarı</h3>
+            <span class="modal-sub">Deterministic Zero-Hallucination SLA • Circuit Breaker • GPU DirectML Benchmark</span>
+          </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeBenchmarkModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="benchmark-summary-bar">
+          <div class="stat-card">
+            <span class="stat-label">GENEL GEÇME ORANI</span>
+            <span id="bmPassRate" class="stat-val green">---</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">SADAKAT (FAITHFULNESS)</span>
+            <span id="bmFaithfulness" class="stat-val cyan">---</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">TOPLAM C# SÜRESİ</span>
+            <span id="bmTotalTime" class="stat-val">---</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">RTX 4060 Ti GPU HIZI</span>
+            <span id="bmGpuSpeed" class="stat-val yellow">---</span>
+          </div>
+        </div>
+
+        <div class="cases-table-container">
+          <table class="benchmark-table">
+            <thead>
+              <tr>
+                <th>Test Kodu</th>
+                <th>Senaryo / Amaç</th>
+                <th>Sorgu & Durum</th>
+                <th>Sadakat</th>
+                <th>Süre</th>
+                <th>Sonuç Kararı</th>
+              </tr>
+            </thead>
+            <tbody id="benchmarkCasesTbody">
+              <tr><td colspan="6" style="text-align:center; padding: 2rem;">Testi başlatmak için "Testi Çalıştır" butonuna basın...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span class="footer-note">4 Zorlu Senaryo (Factual, Self-Correction, Tuzak Soru, Halüsinasyon) C# Agentic Supervisor ile koşturulur.</span>
+        <button id="runBenchmarkBtn" class="run-benchmark-btn" onclick="runLiveBenchmark()">⚡ TESTLERİ KOŞTUR</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
