@@ -18,6 +18,37 @@ using TrustLab.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Config kısayolları — tüm magic değerler appsettings.json'da
+var cfg = builder.Configuration.GetSection("TrustLab");
+var rerankerCfg   = cfg.GetSection("Reranker");
+var embedderCfg   = cfg.GetSection("Embedder");
+var pipelineCfg   = cfg.GetSection("Pipeline");
+var cbCfg         = cfg.GetSection("CircuitBreaker");
+var stressCfg     = cfg.GetSection("StressTest");
+
+string gpuDeviceName  = rerankerCfg["GpuDeviceName"]  ?? "GPU (DirectML)";
+string cpuFallback    = rerankerCfg["CpuFallbackName"] ?? "CrossEncoder CPU";
+string modelFileName  = rerankerCfg["ModelFileName"]   ?? "ms-marco-MiniLM-L-6-v2.onnx";
+string vocabFileName  = rerankerCfg["VocabFileName"]   ?? "vocab.txt";
+int    deviceId       = rerankerCfg.GetValue<int>("DeviceId", 0);
+int    embedDims      = embedderCfg.GetValue<int>("Dimensions", 128);
+int    cbMaxFails     = cbCfg.GetValue<int>("MaxConsecutiveFailures", 2);
+string chatCorpus     = cfg["ChatCorpusDefault"] ?? string.Empty;
+
+// Pipeline defaults (UI slider defaults ile eşleşmeli)
+int   defMaxTokens   = pipelineCfg.GetValue<int>("DefaultMaxTokensPerChunk", 256);
+int   defOverlap     = pipelineCfg.GetValue<int>("DefaultOverlapTokens", 32);
+int   defRrfK        = pipelineCfg.GetValue<int>("DefaultRrfK", 60);
+float defThreshold   = pipelineCfg.GetValue<float>("DefaultRerankThreshold", 0.25f);
+float defMinScore    = pipelineCfg.GetValue<float>("DefaultMinimumRetrievalScore", 0.20f);
+int   defTopK        = pipelineCfg.GetValue<int>("DefaultTopK", 3);
+
+// Stress test sabit değerler
+int    stressEmbedDims  = stressCfg.GetValue<int>("EmbedderDimensions", 128);
+string stressGpuQuery   = stressCfg["GpuNeedleQuery"] ?? "penicillin allergy amoxicillin contraindication";
+float  stressGpuThresh  = stressCfg.GetValue<float>("GpuRerankThreshold", 0.20f);
+int    stressGpuTopK    = stressCfg.GetValue<int>("GpuTopK", 3);
+
 // 1. Dependency Injection Services
 builder.Services.AddCors(options =>
 {
@@ -32,7 +63,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<ITextChunker, SemanticBoundaryChunker>();
 builder.Services.AddSingleton<ISparseIndex, Bm25SparseIndex>();
 builder.Services.AddSingleton<IVectorStore, DenseVectorStore>();
-builder.Services.AddSingleton<ITextEmbedder, DeterministicHashEmbedder>();
+builder.Services.AddSingleton<ITextEmbedder>(_ => new DeterministicHashEmbedder(dimensions: embedDims));
 builder.Services.AddSingleton<IReranker>(sp =>
 {
     string[] candidateDirs = [
@@ -47,13 +78,13 @@ builder.Services.AddSingleton<IReranker>(sp =>
 
     foreach (var dir in candidateDirs)
     {
-        var m = Path.Combine(dir, "models", "ms-marco-MiniLM-L-6-v2.onnx");
-        var v = Path.Combine(dir, "models", "vocab.txt");
+        var m = Path.Combine(dir, "models", modelFileName);
+        var v = Path.Combine(dir, "models", vocabFileName);
         if (File.Exists(m) && string.IsNullOrEmpty(modelPath)) modelPath = m;
         if (File.Exists(v) && string.IsNullOrEmpty(vocabPath)) vocabPath = v;
     }
 
-    return new OnnxGpuReranker(modelPath, vocabPath, deviceId: 0, fallbackReranker: new CrossEncoderReranker());
+    return new OnnxGpuReranker(modelPath, vocabPath, deviceId: deviceId, fallbackReranker: new CrossEncoderReranker());
 });
 
 builder.Services.AddSingleton<IGroundingGuard, NgramGroundingGuard>();
@@ -91,14 +122,15 @@ else
 app.MapGet("/api/system/status", (IReranker reranker) =>
 {
     var onnxReranker = reranker as OnnxGpuReranker;
+    bool gpuAvailable = onnxReranker?.IsGpuAvailable ?? false;
     return Results.Ok(new
     {
         Status = "Online",
-        Framework = ".NET 10.0",
+        Framework = $".NET {System.Environment.Version.Major}.0",
         SimdHardwareAcceleration = System.Numerics.Vector.IsHardwareAccelerated,
         SimdVectorByteSize = System.Numerics.Vector<float>.Count * 4,
-        GpuDirectMlAvailable = onnxReranker?.IsGpuAvailable ?? false,
-        GpuDevice = onnxReranker?.IsGpuAvailable == true ? "NVIDIA GeForce RTX 4060 Ti (DirectML)" : "CrossEncoder CPU",
+        GpuDirectMlAvailable = gpuAvailable,
+        GpuDevice = gpuAvailable ? gpuDeviceName : cpuFallback,
         OnnxModelLoaded = onnxReranker?.IsModelLoaded ?? false,
         MemoryAllocatedMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2)
     });
@@ -159,7 +191,7 @@ app.MapPost("/api/lab/evaluate", async (
     denseTimer.Stop();
 
     // 4. Reciprocal Rank Fusion
-    int rrfK = req.RrfK > 0 ? req.RrfK : 60;
+    int rrfK = req.RrfK > 0 ? req.RrfK : defRrfK;
     var rrf = new ReciprocalRankFusion(rrfK);
     var rankedLists = new List<(IReadOnlyList<RetrievalResult> Results, float Weight)>
     {
@@ -170,7 +202,7 @@ app.MapPost("/api/lab/evaluate", async (
 
     // 5. Cross-Encoder / DirectML GPU Re-Ranking
     var gpuTimer = Stopwatch.StartNew();
-    float threshold = req.RerankThreshold > 0 ? req.RerankThreshold : 0.25f;
+    float threshold = req.RerankThreshold > 0 ? req.RerankThreshold : defThreshold;
     var rerankedResults = await reranker.RerankAsync(
         req.Query,
         fusedResults,
@@ -248,7 +280,7 @@ app.MapPost("/api/lab/evaluate", async (
             TriadEvalMs = Math.Round(triadTimer.Elapsed.TotalMilliseconds, 3),
             TotalLatencyMs = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 3),
             MemoryAllocatedMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2),
-            GpuDevice = reranker is OnnxGpuReranker g && g.IsGpuAvailable ? "NVIDIA GeForce RTX 4060 Ti (DirectML)" : "CrossEncoder CPU"
+            GpuDevice = reranker is OnnxGpuReranker g && g.IsGpuAvailable ? gpuDeviceName : cpuFallback
         },
 
         // Retrieval Results
@@ -278,11 +310,11 @@ app.MapPost("/api/lab/stress-test", async (
     var chunker = new SemanticBoundaryChunker();
     var sparseIndex = new Bm25SparseIndex();
     var vectorStore = new DenseVectorStore();
-    var embedder = new DeterministicHashEmbedder(dimensions: 128);
+    var embedder = new DeterministicHashEmbedder(dimensions: stressEmbedDims);
     var reranker = new CrossEncoderReranker();
     var pipeline = new HybridRetrievalPipeline(chunker, sparseIndex, vectorStore, embedder, reranker);
     var groundingGuard = new NgramGroundingGuard();
-    var circuitBreaker = new DeterministicCircuitBreaker(maxConsecutiveFailures: 2);
+    var circuitBreaker = new DeterministicCircuitBreaker(maxConsecutiveFailures: cbMaxFails);
     var evaluator = new TrustLab.Agents.Evaluation.DeterministicEvaluationService();
 
     // 10 Alakasız Doküman + 1 Tıbbi Kritik İğne ("Needle in a Haystack")
@@ -360,7 +392,7 @@ app.MapPost("/api/lab/stress-test", async (
         };
 
         var supervisor = new TrustLab.Agents.Supervisor.DeterministicSupervisor(pipeline, llmClient, groundingGuard, circuitBreaker);
-        var req = new TrustLab.Application.Interfaces.AgentExecutionRequest(tc.Query, MinimumRetrievalScore: 0.20f);
+        var req = new TrustLab.Application.Interfaces.AgentExecutionRequest(tc.Query, MinimumRetrievalScore: defMinScore);
         
         var sw = Stopwatch.StartNew();
         var execResult = await supervisor.ExecuteAsync(req);
@@ -405,7 +437,7 @@ app.MapPost("/api/lab/stress-test", async (
             new(Chunk.Create("c2", "needle_med_04", "Şiddetli penisilin anafilaksi öyküsünde Amoksisilin mutlak kontrendikedir.", 0, 0, 80), 0.75f, "RRF", 2),
             new(Chunk.Create("c3", "noise_05", "Mars keşif aracı krater araştırmaktadır.", 0, 0, 40), 0.20f, "RRF", 3)
         };
-        var gpuReranked = await onnxGpu.RerankAsync("penicillin allergy and amoxicillin contraindication", candidates, 0.20f, 3);
+        var gpuReranked = await onnxGpu.RerankAsync(stressGpuQuery, candidates, stressGpuThresh, stressGpuTopK);
         gpuTimer.Stop();
         gpuMs = Math.Round(gpuTimer.Elapsed.TotalMilliseconds, 2);
         gpuTopScore = gpuReranked.Count > 0 ? (float)Math.Round(gpuReranked[0].Score, 4) : 0;
@@ -423,7 +455,7 @@ app.MapPost("/api/lab/stress-test", async (
         GpuBenchmark = new
         {
             IsGpuActive = gpuReranker is OnnxGpuReranker g && g.IsGpuAvailable,
-            Device = gpuReranker is OnnxGpuReranker g2 && g2.IsGpuAvailable ? "NVIDIA GeForce RTX 4060 Ti (DirectML)" : "CrossEncoder CPU",
+            Device = gpuReranker is OnnxGpuReranker g2 && g2.IsGpuAvailable ? gpuDeviceName : cpuFallback,
             LatencyMs = gpuMs,
             TopScore = gpuTopScore,
             TopChunk = gpuTopChunk
@@ -447,10 +479,7 @@ app.MapPost("/api/chat/rag", async (
         return Results.BadRequest(new { Error = "Query cannot be empty." });
     }
 
-    string corpus = !string.IsNullOrWhiteSpace(req.Corpus) ? req.Corpus :
-        "Doküman 1: Şiddetli penisilin anafilaksi öyküsü olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir.\n" +
-        "Doküman 2: Alternatif olarak makrolid grubu antibiyotikler (Klaritromisin, Azitromisin 500mg) güvenle tercih edilebilir.\n" +
-        "Doküman 3: Parasetamol yetişkinlerde 6 saatte bir 500mg-1000mg aralığında kullanılır, günlük maksimum doz 4000mg'dır.";
+    string corpus = !string.IsNullOrWhiteSpace(req.Corpus) ? req.Corpus : chatCorpus;
 
     // 1. Ingest & Chunking
     var ingestTimer = Stopwatch.StartNew();
@@ -492,13 +521,13 @@ app.MapPost("/api/chat/rag", async (
     };
     var fusedResults = rrf.Fuse(rankedLists, topK: allChunks.Count);
 
-    // 5. Cross-Encoder / RTX 4060 Ti GPU Re-Ranking
+    // 5. Cross-Encoder / DirectML GPU Re-Ranking
     var gpuTimer = Stopwatch.StartNew();
     var rerankedResults = await reranker.RerankAsync(
         req.Query,
         fusedResults,
-        minimumRelevanceThreshold: 0.20f,
-        topK: 3);
+        minimumRelevanceThreshold: defMinScore,
+        topK: defTopK);
     gpuTimer.Stop();
 
     // 6. Generate or Select Candidate Answer
@@ -580,7 +609,7 @@ app.MapPost("/api/chat/rag", async (
     });
 });
 
-app.Run("http://127.0.0.1:5000");
+app.Run();
 
 // Geometric & Distance Helpers
 static float CosineSim(ReadOnlyMemory<float> a, ReadOnlyMemory<float> b)

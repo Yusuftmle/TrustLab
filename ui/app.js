@@ -39,16 +39,22 @@ async function checkApiHealth() {
   const badge = document.getElementById('apiStatusBadge');
   const text = document.getElementById('apiStatusText');
   try {
-    const res = await fetch(`${API_BASE}/api/system/status`);
+    const res = await fetch(`${API_BASE}/api/system/status`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       const data = await res.json();
       badge.className = "api-status-badge";
-      text.textContent = `🟢 .NET 10 | ${data.gpuDevice} | SIMD AVX`;
+      // API camelCase döndürür: gpuDevice, simdHardwareAcceleration, onnxModelLoaded
+      const simd = data.simdHardwareAcceleration ? '⚡ SIMD AVX' : 'CPU';
+      const gpu = data.gpuDevice || 'CPU Fallback';
+      const onnx = data.onnxModelLoaded ? '🧠 ONNX' : '';
+      text.textContent = `🟢 .NET 10 | ${gpu} | ${simd} ${onnx}`;
       return true;
+    } else {
+      throw new Error('API non-200');
     }
   } catch (err) {
     badge.className = "api-status-badge offline";
-    text.textContent = "🔴 C# API Kapalı";
+    text.textContent = "🔴 C# API Kapalı — " + err.message;
     return false;
   }
 }
@@ -336,7 +342,8 @@ function renderHardwareAndRankingChart(hw, ranking) {
     },
     yAxis: {
       type: 'category',
-      data: ['Chunk & Ingest', 'BM25 Sparse', 'SIMD Dense', 'RTX 4060 Ti GPU', 'Triad Değerlendirme'],
+      // GPU adı API'den dinamik geliyor (hw.gpuDevice)
+      data: ['Chunk & Ingest', 'BM25 Sparse', 'SIMD Dense', hw.gpuDevice || 'GPU Re-Rank', 'Triad Değlendirme'],
       axisLabel: { color: '#f8fafc', fontFamily: 'Plus Jakarta Sans', fontWeight: '600' }
     },
     series: [
@@ -490,23 +497,26 @@ function renderAiResponseWithInlineTracing(msgElemId, data) {
   if (!elem) return;
 
   const bubble = elem.querySelector('.msg-bubble');
-  const isBlocked = data.telemetry.guardrailStatus.includes('BLOCKED');
+  // Güvenli guard: telemetry veya guardrailStatus yoksa crash önlenir
+  const guardrailStatus = (data.telemetry && data.telemetry.guardrailStatus) || '';
+  const isBlocked = guardrailStatus.includes('BLOCKED');
 
   let formattedSentencesHtml = '';
   (data.sentences || []).forEach(s => {
-    const isGrounded = s.isGrounded;
-    const sText = s.sentence;
-    const doc = s.bestDoc;
-    const snippet = (s.snippet || '').replace(/"/g, '&quot;');
+    const isGrounded = s.isGrounded || false;
+    const sText = (s.sentence || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const sTextDisplay = s.sentence || '';
+    const doc = (s.bestDoc || 'Bilinmiyor');
+    const snippet = (s.snippet || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const ratio = Math.round((s.supportRatio || 0) * 100);
 
     formattedSentencesHtml += `
       <span class="traced-sentence ${isGrounded ? 'grounded' : 'ungrounded'}"
-            onmouseenter="highlightSentenceProof('${sText.replace(/'/g, "\\'")}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})"
-            onclick="highlightSentenceProof('${sText.replace(/'/g, "\\'")}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})">
-        ${sText}
+            onmouseenter="highlightSentenceProof('${sText}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})"
+            onclick="highlightSentenceProof('${sText}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})">
+        ${sTextDisplay}
         <small style="font-size:0.65rem; font-weight:bold; opacity:0.85;">[${isGrounded ? '✅ ' + ratio + '%' : '⚠️ Uydurma'}]</small>
-      </span>
+      </span> 
     `;
   });
 
@@ -515,20 +525,28 @@ function renderAiResponseWithInlineTracing(msgElemId, data) {
       Klinik AI Asistanı • ${isBlocked ? '<span style="color:#f43f5e;">⚠️ GÜVENLİK KİLİDİ DEVREDE</span>' : '<span style="color:#10b981;">✅ KANITLANDI</span>'}
     </div>
     <div class="msg-content">
-      ${formattedSentencesHtml || data.answer}
+      ${formattedSentencesHtml || (data.answer || 'Yanıt alınamadı.')}
     </div>
   `;
 }
 
 function updateRagInspector(data) {
+  // Guard: telemetry yoksa işlem yapma
+  if (!data || !data.telemetry) return;
   const t = data.telemetry;
+
   document.getElementById('activeMessageBadge').textContent = data.messageId || 'msg_live';
 
+  // Güvenli sayı formatlaması - undefined/null crash önlenir
+  const fmt2 = v => (typeof v === 'number' ? v.toFixed(2) : '---');
+  const fmt1 = v => (typeof v === 'number' ? v.toFixed(1) : '---');
+  const fmt0 = v => (typeof v === 'number' ? v.toFixed(0) : '---');
+
   // Metrics
-  document.getElementById('inspConfidence').textContent = t.retrievalConfidence.toFixed(2);
-  document.getElementById('inspRerankLift').textContent = `+${t.rerankLiftPercent.toFixed(1)}%`;
-  document.getElementById('inspContextRel').textContent = `${t.contextRelevancyPercent.toFixed(0)}%`;
-  document.getElementById('inspFaithfulness').textContent = `${t.faithfulnessPercent.toFixed(0)}%`;
+  document.getElementById('inspConfidence').textContent = fmt2(t.retrievalConfidence);
+  document.getElementById('inspRerankLift').textContent = `+${fmt1(t.rerankLiftPercent)}%`;
+  document.getElementById('inspContextRel').textContent = `${fmt0(t.contextRelevancyPercent)}%`;
+  document.getElementById('inspFaithfulness').textContent = `${fmt0(t.faithfulnessPercent)}%`;
 
   // Dosage Lock
   const dosageBox = document.getElementById('dosageLockBox');
@@ -536,25 +554,27 @@ function updateRagInspector(data) {
   const dosageDesc = document.getElementById('dosageLockDesc');
   const dosageIcon = document.getElementById('dosageLockIcon');
 
-  if (t.dosageGuard.isValid) {
+  const dg = t.dosageGuard || {};
+  if (dg.isValid !== false) {
     dosageBox.className = "dosage-lock-box";
     dosageIcon.textContent = "🛡️";
     dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ✅ DOĞRULANDI";
     dosageTitle.style.color = "#10b981";
-    dosageDesc.textContent = t.dosageGuard.status;
+    dosageDesc.textContent = dg.status || '';
   } else {
     dosageBox.className = "dosage-lock-box violation";
     dosageIcon.textContent = "🚨";
     dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ⚠️ İHLAL (ENGEL)";
     dosageTitle.style.color = "#f43f5e";
-    dosageDesc.textContent = t.dosageGuard.status;
+    dosageDesc.textContent = dg.status || '';
   }
 
-  // Hardware Profiling
-  document.getElementById('inspTotalTime').textContent = `${t.latencyMs.total} ms`;
-  document.getElementById('inspBm25Ms').textContent = `${t.latencyMs.bm25} ms`;
-  document.getElementById('inspSimdMs').textContent = `${t.latencyMs.simdVector} ms`;
-  document.getElementById('inspGpuMs').textContent = `${t.latencyMs.gpuRerank} ms`;
+  // Hardware Profiling - null guard eklendi
+  const lms = t.latencyMs || {};
+  document.getElementById('inspTotalTime').textContent = `${lms.total ?? '---'} ms`;
+  document.getElementById('inspBm25Ms').textContent = `${lms.bm25 ?? '---'} ms`;
+  document.getElementById('inspSimdMs').textContent = `${lms.simdVector ?? '---'} ms`;
+  document.getElementById('inspGpuMs').textContent = `${lms.gpuRerank ?? '---'} ms`;
 
   // Raw JSON
   document.getElementById('rawTelemetryJson').textContent = JSON.stringify(data, null, 2);
@@ -562,7 +582,13 @@ function updateRagInspector(data) {
   // Default first sentence proof
   if (data.sentences && data.sentences.length > 0) {
     const s0 = data.sentences[0];
-    highlightSentenceProof(s0.sentence, s0.bestDoc, s0.snippet, s0.isGrounded, Math.round(s0.supportRatio * 100));
+    highlightSentenceProof(
+      s0.sentence || '',
+      s0.bestDoc || 'Bilinmiyor',
+      s0.snippet || '',
+      s0.isGrounded || false,
+      Math.round((s0.supportRatio || 0) * 100)
+    );
   }
 }
 
@@ -624,11 +650,13 @@ async function runLiveBenchmark() {
       });
 
       if (data.gpuBenchmark && data.gpuBenchmark.isGpuActive) {
+        const gpuDevice = data.gpuBenchmark.device || 'GPU (DirectML)';
+        const modelName = 'ONNX ms-marco-MiniLM-L-6-v2'; // model adı sabit — benchmark'e özeldir
         rowsHtml += `
           <tr style="background: rgba(245, 158, 11, 0.08);">
             <td class="tc-id">GPU-01</td>
-            <td><strong>RTX 4060 Ti DirectML GPU Re-Ranking (Needle Match)</strong><br/><span style="color:#f59e0b; font-size:0.7rem;">ONNX ms-marco-MiniLM-L-6-v2</span></td>
-            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">penicillin allergy and amoxicillin contraindication</td>
+            <td><strong>${gpuDevice} Re-Ranking (Needle Match)</strong><br/><span style="color:#f59e0b; font-size:0.7rem;">${modelName}</span></td>
+            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">${data.gpuBenchmark.topChunk || ''}</td>
             <td style="font-family:var(--font-mono); font-weight:bold; color:#10b981;">Skor: ${(data.gpuBenchmark.topScore*100).toFixed(1)}%</td>
             <td style="font-family:var(--font-mono); font-weight:bold; color:#f59e0b;">${data.gpuBenchmark.latencyMs} ms</td>
             <td><span class="verdict-tag pass">🚀 GPU ZİRVE</span></td>
