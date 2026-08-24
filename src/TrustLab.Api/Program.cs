@@ -7,6 +7,7 @@ using TrustLab.Guardrails.CircuitBreaker;
 using TrustLab.Guardrails.Evaluation;
 using TrustLab.Guardrails.Grounding;
 using TrustLab.Guardrails.Schema;
+using TrustLab.Infrastructure.Documents;
 using TrustLab.Infrastructure.Embedding;
 using TrustLab.Infrastructure.Llm;
 using TrustLab.Rag.Chunking;
@@ -48,6 +49,15 @@ int    stressEmbedDims  = stressCfg.GetValue<int>("EmbedderDimensions", 128);
 string stressGpuQuery   = stressCfg["GpuNeedleQuery"] ?? "penicillin allergy amoxicillin contraindication";
 float  stressGpuThresh  = stressCfg.GetValue<float>("GpuRerankThreshold", 0.20f);
 int    stressGpuTopK    = stressCfg.GetValue<int>("GpuTopK", 3);
+
+// LLM (Ollama) config
+var llmCfg          = cfg.GetSection("Llm").GetSection("Ollama");
+string ollamaBaseUrl = llmCfg["BaseUrl"]    ?? "http://localhost:11434";
+string ollamaModel   = llmCfg["Model"]      ?? "qwen2.5:7b";
+float  ollamaTemp    = llmCfg.GetValue<float>("Temperature", 0.1f);
+bool   autoPull      = llmCfg.GetValue<bool>("AutoPullModel", true);
+string systemPrompt  = llmCfg["SystemPrompt"] ??
+    "Sen bir klinik karar destek asistanısın. Yalnızca sağlanan bağlam belgelerine dayalı yanıtlar üretirsin.";
 
 // 1. Dependency Injection Services
 builder.Services.AddCors(options =>
@@ -93,6 +103,12 @@ builder.Services.AddSingleton<RagTriadEvaluator>();
 builder.Services.AddSingleton<ExecutionTracer>();
 builder.Services.AddTransient<IHybridRetrievalPipeline, HybridRetrievalPipeline>();
 
+// LLM istemcisi: Ollama yerel sunucu
+builder.Services.AddSingleton<ILlmClient>(_ => new OllamaLlmClient(ollamaBaseUrl, ollamaModel));
+
+// Çok formatlı Doküman Yükleyici (PDF, TXT, MD, JSON, CSV)
+builder.Services.AddSingleton<IDocumentLoader>(_ => CompositeDocumentLoader.CreateDefault());
+
 var app = builder.Build();
 
 app.UseCors();
@@ -135,6 +151,69 @@ app.MapGet("/api/system/status", (IReranker reranker) =>
         MemoryAllocatedMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2)
     });
 });
+
+// POST /api/documents/upload — PDF (şifreli/kilitli dahil), TXT, MD, JSON, CSV Yükleme & Çıkarım
+app.MapPost("/api/documents/upload", async (
+    HttpRequest request,
+    [Microsoft.AspNetCore.Mvc.FromServices] IDocumentLoader documentLoader,
+    [Microsoft.AspNetCore.Mvc.FromServices] ITextChunker chunker) =>
+{
+    if (!request.HasFormContentType || request.Form.Files.Count == 0)
+    {
+        return Results.BadRequest(new { Error = "Lütfen yüklenecek bir dosya seçiniz (.pdf, .txt, .md, .json, .csv)." });
+    }
+
+    var file = request.Form.Files[0];
+    string? password = request.Form.TryGetValue("password", out var pw) && !string.IsNullOrWhiteSpace(pw) ? pw.ToString() : null;
+
+    if (file.Length == 0)
+    {
+        return Results.BadRequest(new { Error = "Yüklenen dosya boş." });
+    }
+
+    try
+    {
+        using var stream = file.OpenReadStream();
+        var documents = await documentLoader.LoadAsync(stream, file.FileName, password);
+
+        var allChunks = new List<Chunk>();
+        foreach (var doc in documents)
+        {
+            allChunks.AddRange(chunker.ChunkDocument(doc, 256, 32));
+        }
+
+        var totalChars = documents.Sum(d => d.Content.Length);
+
+        return Results.Ok(new
+        {
+            FileName = file.FileName,
+            FileSizeBytes = file.Length,
+            TotalPagesOrDocs = documents.Count,
+            TotalChunks = allChunks.Count,
+            TotalCharacters = totalChars,
+            CombinedText = string.Join("\n\n", documents.Select(d => d.Content)),
+            Documents = documents.Select(d => new
+            {
+                d.Id,
+                Preview = d.Content.Length > 250 ? d.Content[..250] + "..." : d.Content,
+                Length = d.Content.Length,
+                d.Metadata
+            }),
+            Chunks = allChunks.Select(c => new
+            {
+                c.Id,
+                c.DocumentId,
+                c.Content,
+                c.ChunkIndex,
+                Length = c.Content.Length
+            })
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { Error = ex.Message });
+    }
+}).DisableAntiforgery();
 
 // POST /api/lab/evaluate — Endüstri Standardı RAG Triad, Sıralama Metrikleri & Donanım Profiling
 app.MapPost("/api/lab/evaluate", async (
@@ -464,12 +543,13 @@ app.MapPost("/api/lab/stress-test", async (
     });
 });
 
-// POST /api/chat/rag — Canlı Sağlık Chat & RAG Observability Endpoint'i
+// POST /api/chat/rag — Canlı Sağlık Chat & RAG Observability Endpoint'i (Gerçek Ollama LLM)
 app.MapPost("/api/chat/rag", async (
     [Microsoft.AspNetCore.Mvc.FromBody] ChatRagRequest req,
     [Microsoft.AspNetCore.Mvc.FromServices] ITextChunker chunker,
     [Microsoft.AspNetCore.Mvc.FromServices] ITextEmbedder embedder,
     [Microsoft.AspNetCore.Mvc.FromServices] IReranker reranker,
+    [Microsoft.AspNetCore.Mvc.FromServices] ILlmClient llmClient,
     [Microsoft.AspNetCore.Mvc.FromServices] RagTriadEvaluator triadEvaluator) =>
 {
     var totalTimer = Stopwatch.StartNew();
@@ -530,12 +610,46 @@ app.MapPost("/api/chat/rag", async (
         topK: defTopK);
     gpuTimer.Stop();
 
-    // 6. Generate or Select Candidate Answer
-    string finalAnswer = !string.IsNullOrWhiteSpace(req.CandidateResponseOverride)
-        ? req.CandidateResponseOverride
-        : (rerankedResults.Count > 0
-            ? rerankedResults[0].Chunk.Content
-            : "İlgili tıbbi dokümanda bu konuyla ilgili doğrulanmış bir klinik bilgi bulunamadı.");
+    // 6. RAG Prompt oluştur + Ollama LLM'den gerçek yanıt al
+    var llmTimer = Stopwatch.StartNew();
+    string finalAnswer;
+
+    if (!string.IsNullOrWhiteSpace(req.CandidateResponseOverride))
+    {
+        // Test modu: override yanıtı kullan (grounding testi için)
+        finalAnswer = req.CandidateResponseOverride;
+    }
+    else if (rerankedResults.Count > 0)
+    {
+        // Gerçek RAG modu: context'i prompt'a göm, LLM'den yanıt al
+        var contextBuilder = new System.Text.StringBuilder();
+        contextBuilder.AppendLine("=== KLİNİK BAĞLAM BELGELERİ ===");
+        foreach (var (result, idx) in rerankedResults.Select((r, i) => (r, i + 1)))
+        {
+            contextBuilder.AppendLine($"[Kaynak {idx} | Skor: {result.Score:F2}] {result.Chunk.DocumentId}");
+            contextBuilder.AppendLine(result.Chunk.Content);
+            contextBuilder.AppendLine();
+        }
+        contextBuilder.AppendLine("==============================");
+        contextBuilder.AppendLine($"SORU: {req.Query}");
+        contextBuilder.AppendLine("Yalnızca yukarıdaki klinik belgelerden yanıtla. Belgede olmayan bilgiyi ekleme.");
+
+        finalAnswer = await llmClient.GenerateResponseAsync(
+            prompt: contextBuilder.ToString(),
+            systemInstruction: systemPrompt,
+            temperature: ollamaTemp);
+
+        if (string.IsNullOrWhiteSpace(finalAnswer))
+        {
+            finalAnswer = "Ollama LLM bağlantı hatası — lütfen Ollama servisinin çalıştığını doğrulayın.";
+        }
+    }
+    else
+    {
+        // Hiç sonuç bulunamadı
+        finalAnswer = "İlgili tıbbi dokümanda bu konuyla ilgili doğrulanmış bir klinik bilgi bulunamadı.";
+    }
+    llmTimer.Stop();
 
     // 7. Sentence-by-Sentence Grounding & Trace Extraction
     var topChunks = rerankedResults.Select(r => r.Chunk).ToList();
@@ -594,8 +708,10 @@ app.MapPost("/api/chat/rag", async (
                 Bm25 = Math.Round(bm25Timer.Elapsed.TotalMilliseconds, 2),
                 SimdVector = Math.Round(denseTimer.Elapsed.TotalMilliseconds, 2),
                 GpuRerank = Math.Round(gpuTimer.Elapsed.TotalMilliseconds, 2),
+                LlmGenerate = Math.Round(llmTimer.Elapsed.TotalMilliseconds, 2),
                 Total = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2)
             },
+            LlmModel = ollamaModel,
 
             RetrievedChunks = rerankedResults.Select(r => new
             {

@@ -674,6 +674,121 @@ async function runLiveBenchmark() {
   }
 }
 
+// 8. Multi-format Document Ingestion (PDF, TXT, MD, JSON, CSV) & Drag-and-Drop
+let selectedUploadFile = null;
+
+function handleFileSelected(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  setupFileForUpload(file);
+}
+
+function setupFileForUpload(file) {
+  selectedUploadFile = file;
+  const label = document.getElementById('uploadFileNameLabel');
+  const btn = document.getElementById('uploadProcessBtn');
+  const pwGroup = document.getElementById('pdfPasswordGroup');
+  const status = document.getElementById('uploadStatusBadge');
+
+  const sizeKb = (file.size / 1024).toFixed(1);
+  label.innerHTML = `📄 <strong>${file.name}</strong> (${sizeKb} KB)`;
+  btn.style.display = 'block';
+  btn.textContent = `⚡ "${file.name}" Dosyasını Çıkar & Ekle`;
+  status.style.display = 'none';
+
+  // PDF ise parola alanını göster
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    pwGroup.style.display = 'block';
+  } else {
+    pwGroup.style.display = 'none';
+  }
+}
+
+async function uploadAndIngestDocument() {
+  if (!selectedUploadFile) return;
+
+  const btn = document.getElementById('uploadProcessBtn');
+  const status = document.getElementById('uploadStatusBadge');
+  const pwInput = document.getElementById('pdfPasswordInput');
+  const password = pwInput ? pwInput.value.trim() : '';
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Doküman Ayrıştırılıyor...';
+  status.style.display = 'block';
+  status.className = 'upload-status loading';
+  status.textContent = 'Dosya sunucuya gönderiliyor ve metin katmanları çıkarılıyor...';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', selectedUploadFile);
+    if (password) {
+      formData.append('password', password);
+    }
+
+    const res = await fetch(`${API_BASE}/api/documents/upload`, {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || 'Dosya işlenirken hata oluştu.');
+    }
+
+    // Korpus alanına çıkarılan metni yerleştir
+    const corpusInput = document.getElementById('corpusInput');
+    if (corpusInput && data.combinedText) {
+      corpusInput.value = data.combinedText;
+    }
+
+    status.className = 'upload-status success';
+    status.innerHTML = `✅ <strong>${data.fileName}</strong> başarıyla aktarıldı!<br/>` +
+                       `📄 ${data.totalPagesOrDocs} Bölüm/Sayfa • 🧩 ${data.totalChunks} Chunk • 📝 ${data.totalCharacters} Karakter`;
+
+    btn.textContent = '✅ Korpus Güncellendi';
+
+    // RAG Pipeline'ını yeni korpusla anında çalıştır
+    await executeFullPipeline();
+
+  } catch (err) {
+    status.className = 'upload-status error';
+    status.innerHTML = `❌ Hata: ${err.message}`;
+    btn.textContent = '⚠️ Yeniden Dene';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setupDragAndDrop() {
+  const dropzone = document.getElementById('uploadDropzone');
+  if (!dropzone) return;
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('drag-over');
+    }, false);
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('drag-over');
+    }, false);
+  });
+
+  dropzone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    const files = dt.files;
+    if (files && files.length > 0) {
+      setupFileForUpload(files[0]);
+    }
+  }, false);
+}
+
 // Window Resize
 window.addEventListener('resize', () => {
   if (vectorChartInstance) vectorChartInstance.resize();
@@ -683,6 +798,7 @@ window.addEventListener('resize', () => {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+  setupDragAndDrop();
   await checkApiHealth();
-  executeFullPipeline();
+  await executeFullPipeline();
 });

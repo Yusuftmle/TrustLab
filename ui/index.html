@@ -79,6 +79,32 @@
         </div>
       </div>
 
+      <!-- Document Ingestion & File Upload Section -->
+      <div class="side-card upload-card">
+        <div class="card-head">
+          <span class="side-tag" style="background:rgba(168,85,247,0.15); color:#a855f7; border-color:rgba(168,85,247,0.3);">İÇE AKTAR</span>
+          <h3>PDF / TXT / MD Doküman Yükleyici</h3>
+        </div>
+        <div class="upload-dropzone" id="uploadDropzone" onclick="document.getElementById('fileUploadInput').click()">
+          <input type="file" id="fileUploadInput" style="display:none;" accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
+          <div class="dropzone-inner">
+            <span class="upload-icon">📄</span>
+            <div class="upload-text-box">
+              <strong id="uploadFileNameLabel">PDF, TXT veya MD Dosyasını Sürükleyin</strong>
+              <small class="upload-sub">veya bilgisayarınızdan seçmek için tıklayın</small>
+            </div>
+          </div>
+        </div>
+        <div id="pdfPasswordGroup" class="form-group" style="display: none; margin-top: 0.6rem;">
+          <label style="color:#f59e0b;">🔒 Kilitli / Şifreli PDF Parolası (Opsiyonel):</label>
+          <input type="password" id="pdfPasswordInput" class="custom-input" placeholder="PDF şifresi (varsa)...">
+        </div>
+        <button id="uploadProcessBtn" class="upload-action-btn" style="display:none;" onclick="uploadAndIngestDocument()">
+          ⚡ Metinleri Çıkar & Korpus'a Ekle
+        </button>
+        <div id="uploadStatusBadge" class="upload-status" style="display: none;"></div>
+      </div>
+
       <!-- Corpus Section -->
       <div class="side-card">
         <div class="card-head">

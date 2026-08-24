@@ -1144,3 +1144,102 @@ html, body {
   max-height: 180px;
   overflow-y: auto;
 }
+
+/* 7. Document Upload & Drag & Drop Styles */
+.upload-card {
+  border-color: rgba(168, 85, 247, 0.25);
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.04) 0%, rgba(15, 24, 48, 0.8) 100%);
+}
+
+.upload-dropzone {
+  border: 2px dashed rgba(168, 85, 247, 0.35);
+  border-radius: 10px;
+  padding: 0.9rem;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(168, 85, 247, 0.03);
+  transition: all 0.2s ease;
+  margin-top: 0.4rem;
+}
+
+.upload-dropzone:hover, .upload-dropzone.drag-over {
+  border-color: #a855f7;
+  background: rgba(168, 85, 247, 0.1);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.25);
+}
+
+.dropzone-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  justify-content: center;
+}
+
+.upload-icon {
+  font-size: 1.6rem;
+}
+
+.upload-text-box {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.upload-text-box strong {
+  font-size: 0.76rem;
+  color: #f1f5f9;
+  font-weight: 700;
+}
+
+.upload-sub {
+  font-size: 0.66rem;
+  color: #94a3b8;
+}
+
+.upload-action-btn {
+  width: 100%;
+  margin-top: 0.6rem;
+  padding: 0.55rem;
+  background: linear-gradient(135deg, #a855f7, #6366f1);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 0.76rem;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.3);
+  transition: all 0.2s ease;
+}
+
+.upload-action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 18px rgba(168, 85, 247, 0.5);
+}
+
+.upload-status {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
+.upload-status.success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.upload-status.error {
+  background: rgba(244, 63, 94, 0.12);
+  color: #fb7185;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.upload-status.loading {
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
