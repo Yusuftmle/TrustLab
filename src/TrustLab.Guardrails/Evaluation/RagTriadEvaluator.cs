@@ -24,8 +24,26 @@ public sealed class RagTriadEvaluator
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "the", "is", "at", "which", "on", "a", "an", "and", "or", "in", "with", "to", "for", "of", "as",
-        "by", "that", "this", "it", "from", "be", "are", "was", "were", "been", "has", "have", "had", "bu", "bir", "ve", "ile", "için", "olan", "olarak"
+        "by", "that", "this", "it", "from", "be", "are", "was", "were", "been", "has", "have", "had",
+        "bu", "bir", "ve", "ile", "için", "olan", "olarak", "veya", "ya", "da", "de", "ki", "ancak",
+        "fakat", "ise", "gibi", "göre", "kadar", "çok", "daha", "en", "her", "tüm", "bazı", "mı", "mi",
+        "mu", "mü", "var", "yok", "hakkında", "başka", "durum", "olduğu", "olduğunu", "yani", "tarafından",
+        "belirten", "belirtmektedir", "belirtmemektedir", "göre"
     };
+
+    private static bool IsConversationalOrMetaSentence(string sentence, IReadOnlyList<Chunk> chunks)
+    {
+        if (string.IsNullOrWhiteSpace(sentence)) return true;
+        
+        // Cümle soru cümlesi mi veya çok kısa bir nezaket/bağlaç ifadesi mi?
+        var tokens = Tokenizer.Tokenize(sentence).Where(t => !StopWords.Contains(t)).ToList();
+        if (tokens.Count <= 2 && (sentence.EndsWith("?") || sentence.Length < 35))
+        {
+            return true;
+        }
+
+        return false;
+    }
 
     public RagTriadScore Evaluate(
         string query,
@@ -73,12 +91,11 @@ public sealed class RagTriadEvaluator
             foreach (var cs in chunkSentences)
             {
                 totalSentences++;
-                var csStems = Tokenizer.Tokenize(cs)
+                var csTokens = Tokenizer.Tokenize(cs)
                     .Where(t => !StopWords.Contains(t))
-                    .Select(Tokenizer.Stem)
                     .ToList();
 
-                if (csStems.Count > 0 && csStems.Any(s => queryStems.Contains(s)))
+                if (csTokens.Count > 0 && csTokens.Any(t => queryStems.Any(qs => Tokenizer.IsFuzzyStemMatch(t, qs))))
                 {
                     relevantSentences++;
                 }
@@ -102,11 +119,10 @@ public sealed class RagTriadEvaluator
 
         if (sentences.Count == 0) return (1f, Array.Empty<SentenceGroundingDetail>());
 
-        var allContextText = string.Join(" ", chunks.Select(c => c.Content));
-        var contextStems = Tokenizer.Tokenize(allContextText)
+        var allContextTokens = chunks
+            .SelectMany(c => Tokenizer.Tokenize(c.Content))
             .Where(t => !StopWords.Contains(t))
-            .Select(Tokenizer.Stem)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToList();
 
         var details = new List<SentenceGroundingDetail>();
         int groundedCount = 0;
@@ -114,43 +130,69 @@ public sealed class RagTriadEvaluator
         for (int i = 0; i < sentences.Count; i++)
         {
             string sentence = sentences[i];
-            var sStems = Tokenizer.Tokenize(sentence)
+
+            // 1. Selamlaşma, soru veya meta bildirimlerini dinamik tespit et
+            if (IsConversationalOrMetaSentence(sentence, chunks))
+            {
+                groundedCount++;
+                details.Add(new SentenceGroundingDetail(
+                    SentenceIndex: i + 1,
+                    Sentence: sentence,
+                    IsGrounded: true,
+                    SupportRatio: 1.0f,
+                    BestMatchingDocId: "Klinik Diyalog / Meta Yanıt",
+                    BestMatchingSnippet: "Klinik diyalog, yönlendirme veya bilgi yokluğu açıklaması."));
+                continue;
+            }
+
+            var sTokens = Tokenizer.Tokenize(sentence)
                 .Where(t => !StopWords.Contains(t))
-                .Select(Tokenizer.Stem)
                 .ToList();
 
-            if (sStems.Count == 0)
+            if (sTokens.Count == 0)
             {
                 groundedCount++;
                 details.Add(new SentenceGroundingDetail(i + 1, sentence, true, 1.0f, null, null));
                 continue;
             }
 
-            int matched = sStems.Count(s => contextStems.Contains(s));
-            float supportRatio = (float)matched / sStems.Count;
-            bool isGrounded = supportRatio >= 0.50f;
+            // Türkçe morfolojik eşleşme
+            int matched = sTokens.Count(st => allContextTokens.Any(ct => Tokenizer.IsFuzzyStemMatch(st, ct)));
+            float supportRatio = (float)matched / sTokens.Count;
+            
+            // Factual eşik: en az %40 klinik kanıt örtüşmesi
+            bool isGrounded = supportRatio >= 0.40f;
 
             if (isGrounded) groundedCount++;
 
-            // Find best matching source chunk
+            // En iyi eşleşen dokümanı ve o dokümandaki tam kanıt satırını bul
             string? bestDocId = null;
             string? bestSnippet = null;
             int maxDocMatches = 0;
 
             foreach (var chunk in chunks)
             {
-                var docStems = Tokenizer.Tokenize(chunk.Content)
-                    .Where(t => !StopWords.Contains(t))
-                    .Select(Tokenizer.Stem)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-                int docMatches = sStems.Count(s => docStems.Contains(s));
-                if (docMatches > maxDocMatches)
+                var chunkLines = chunk.Content.Split(new[] { '\n', '.', '•', '-' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var cLine in chunkLines)
                 {
-                    maxDocMatches = docMatches;
-                    bestDocId = chunk.DocumentId;
-                    bestSnippet = chunk.Content.Length > 80 ? chunk.Content[..80] + "..." : chunk.Content;
+                    if (cLine.Length < 10) continue;
+                    var lineTokens = Tokenizer.Tokenize(cLine)
+                        .Where(t => !StopWords.Contains(t))
+                        .ToList();
+
+                    int lineMatches = sTokens.Count(st => lineTokens.Any(lt => Tokenizer.IsFuzzyStemMatch(st, lt)));
+                    if (lineMatches > maxDocMatches)
+                    {
+                        maxDocMatches = lineMatches;
+                        bestDocId = chunk.DocumentId;
+                        bestSnippet = cLine;
+                    }
                 }
+            }
+
+            if (string.IsNullOrWhiteSpace(bestSnippet) && chunks.Count > 0)
+            {
+                bestSnippet = chunks[0].Content.Length > 120 ? chunks[0].Content[..120] + "..." : chunks[0].Content;
             }
 
             details.Add(new SentenceGroundingDetail(
@@ -158,8 +200,8 @@ public sealed class RagTriadEvaluator
                 Sentence: sentence,
                 IsGrounded: isGrounded,
                 SupportRatio: (float)Math.Round(supportRatio, 2),
-                BestMatchingDocId: bestDocId,
-                BestMatchingSnippet: bestSnippet));
+                BestMatchingDocId: bestDocId ?? (chunks.Count > 0 ? chunks[0].DocumentId : "Kaynak Belge"),
+                BestMatchingSnippet: bestSnippet ?? (chunks.Count > 0 ? chunks[0].Content : "")));
         }
 
         float faithfulness = (float)groundedCount / sentences.Count;

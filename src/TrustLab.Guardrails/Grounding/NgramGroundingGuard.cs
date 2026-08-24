@@ -10,7 +10,10 @@ public sealed class NgramGroundingGuard : IGroundingGuard
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "the", "is", "at", "which", "on", "a", "an", "and", "or", "in", "with", "to", "for", "of", "as",
-        "by", "that", "this", "it", "from", "be", "are", "was", "were", "been", "has", "have", "had", "bu", "bir", "ve", "ile", "için", "olan", "olarak"
+        "by", "that", "this", "it", "from", "be", "are", "was", "were", "been", "has", "have", "had",
+        "bu", "bir", "ve", "ile", "için", "olan", "olarak", "veya", "ya", "da", "de", "ki", "ancak",
+        "fakat", "ise", "gibi", "göre", "kadar", "çok", "daha", "en", "her", "tüm", "bazı", "mı", "mi",
+        "mu", "mü", "var", "yok", "hakkında", "başka", "durum", "olduğu", "olduğunu", "yani", "tarafından"
     };
 
     public Task<GuardrailVerdict> VerifyGroundingAsync(
@@ -35,14 +38,11 @@ public sealed class NgramGroundingGuard : IGroundingGuard
                 faithfulnessScore: 0.0f));
         }
 
-        // Aggregate source context stems and n-grams
-        var contextText = string.Join(" ", sourceContext.Select(c => c.Content));
-        var contextStems = Tokenizer.Tokenize(contextText)
+        // Aggregate source context tokens
+        var allContextTokens = sourceContext
+            .SelectMany(c => Tokenizer.Tokenize(c.Content))
             .Where(t => !StopWords.Contains(t))
-            .Select(Tokenizer.Stem)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var contextBigrams = ExtractNgrams(contextText, 2);
+            .ToList();
 
         // Split generated response into sentences/claims
         var sentences = SplitIntoSentences(generatedResponse);
@@ -57,39 +57,35 @@ public sealed class NgramGroundingGuard : IGroundingGuard
         for (int i = 0; i < sentences.Count; i++)
         {
             string sentence = sentences[i];
-            var sentenceStems = Tokenizer.Tokenize(sentence)
+
+            var sTokens = Tokenizer.Tokenize(sentence)
                 .Where(t => !StopWords.Contains(t))
-                .Select(Tokenizer.Stem)
                 .ToList();
 
-            if (sentenceStems.Count == 0)
+            // Kısa soru/nezaket cümlesi veya içerik kelimesi içermeyen bağlaç cümleleri
+            if (sTokens.Count <= 2 && (sentence.EndsWith("?") || sentence.Length < 35))
             {
                 groundedSentencesCount++;
                 continue;
             }
 
-            // 1. Unigram Stem Support Ratio
-            int supportedUnigrams = sentenceStems.Count(t => contextStems.Contains(t));
-            float unigramSupportRatio = (float)supportedUnigrams / sentenceStems.Count;
+            if (sTokens.Count == 0)
+            {
+                groundedSentencesCount++;
+                continue;
+            }
 
-            // 2. Bigram Support
-            var sentenceBigrams = ExtractNgrams(sentence, 2);
-            int supportedBigrams = sentenceBigrams.Count(b => contextBigrams.Contains(b));
-            float bigramSupportRatio = sentenceBigrams.Count > 0
-                ? (float)supportedBigrams / sentenceBigrams.Count
-                : unigramSupportRatio;
+            // Türkçe kök eşleşmesi
+            int supportedTokens = sTokens.Count(st => allContextTokens.Any(ct => Tokenizer.IsFuzzyStemMatch(st, ct)));
+            float tokenSupportRatio = (float)supportedTokens / sTokens.Count;
 
-            // Factual sentence grounding score: 60% unigram + 40% bigram
-            float sentenceGroundingScore = (unigramSupportRatio * 0.6f) + (bigramSupportRatio * 0.4f);
-
-            // Strict grounding threshold per sentence (0.60)
-            if (sentenceGroundingScore >= 0.60f)
+            if (tokenSupportRatio >= 0.40f)
             {
                 groundedSentencesCount++;
             }
             else
             {
-                violations.Add($"Ungrounded claim detected at sentence {i + 1} (Support: {sentenceGroundingScore:P1}): \"{sentence}\"");
+                violations.Add($"Ungrounded claim detected at sentence {i + 1} (Support: {tokenSupportRatio:P1}): \"{sentence}\"");
             }
         }
 

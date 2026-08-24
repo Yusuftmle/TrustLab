@@ -24,6 +24,7 @@ public static class DosageAndNumericGuard
         }
 
         var allContextText = string.Join(" ", sourceChunks.Select(c => c.Content));
+        var allContextNormalized = NormalizeDosage(allContextText);
 
         var answerDosages = DosagePattern.Matches(answer)
             .Select(m => NormalizeDosage(m.Value))
@@ -39,9 +40,8 @@ public static class DosageAndNumericGuard
 
         foreach (var dosage in answerDosages)
         {
-            // Check if this dosage exists anywhere in source chunks
-            if (!allContextText.Contains(dosage, StringComparison.OrdinalIgnoreCase) &&
-                !Regex.IsMatch(allContextText, Regex.Escape(dosage).Replace(@"\ ", @"\s*"), RegexOptions.IgnoreCase))
+            // Check if this dosage exists in normalized source context (handles spaces, hyphens, and suffix differences)
+            if (!allContextNormalized.Contains(dosage, StringComparison.OrdinalIgnoreCase))
             {
                 missingDosages.Add(dosage);
             }

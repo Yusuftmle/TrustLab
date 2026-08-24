@@ -103,6 +103,9 @@
           ⚡ Metinleri Çıkar & Korpus'a Ekle
         </button>
         <div id="uploadStatusBadge" class="upload-status" style="display: none;"></div>
+        <button id="viewChunksBtn" class="upload-action-btn" style="display:none; background:rgba(99,102,241,0.2); border:1px solid #6366f1; margin-top:0.4rem;" onclick="openChunksModal()">
+          📑 Çıkarılan Chunk'ları İncele
+        </button>
       </div>
 
       <!-- Corpus Section -->
@@ -134,37 +137,49 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
     <main class="visualizers-grid">
       
       <!-- Chart 1: 2D Vector Space & L2 Distance -->
-      <div class="viz-box">
+      <div id="vizBox1" class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge">1. VEKTÖR UZAYI & L2</span>
-          <h4>Vektör Uzayı & Cosine / L2 Geometrik Haritası</h4>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="viz-badge">1. VEKTÖR UZAYI & L2</span>
+            <h4>Vektör Uzayı & Cosine / L2 Geometrik Haritası</h4>
+          </div>
+          <button class="viz-expand-btn" title="Tam Ekran / Büyüt (Mouse ile Yakınlaştır / Kaydır)" onclick="toggleFullscreenViz('vizBox1')">⛶</button>
         </div>
         <div id="vectorSpaceChart" class="chart-canvas"></div>
       </div>
 
       <!-- Chart 2: RAG Triad Radar & Precision Bars -->
-      <div class="viz-box">
+      <div id="vizBox2" class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge cyan">2. RAG TRIAD</span>
-          <h4>RAG Triad Metrikleri (Context Relevancy • Faithfulness • Answer Relevancy)</h4>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="viz-badge cyan">2. RAG TRIAD</span>
+            <h4>RAG Triad Metrikleri (Context Relevancy • Faithfulness • Answer Relevancy)</h4>
+          </div>
+          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox2')">⛶</button>
         </div>
         <div id="ragTriadChart" class="chart-canvas"></div>
       </div>
 
       <!-- Chart 3: Hardware Profiling & Ranking Metrics (NDCG, MRR, GPU Latency) -->
-      <div class="viz-box">
+      <div id="vizBox3" class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge yellow">3. DONANIM PROFILING & NDCG</span>
-          <h4>Donanım Gecikme Dağılımı (CPU SIMD vs BM25 vs RTX 4060 Ti GPU)</h4>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="viz-badge yellow">3. DONANIM PROFILING & NDCG</span>
+            <h4>Donanım Gecikme Dağılımı (CPU SIMD vs BM25 vs RTX 4060 Ti GPU)</h4>
+          </div>
+          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox3')">⛶</button>
         </div>
         <div id="hardwareProfilingChart" class="chart-canvas"></div>
       </div>
 
       <!-- Chart 4: Sentence-by-Sentence Grounding Proof Explorer -->
-      <div class="viz-box">
+      <div id="vizBox4" class="viz-box">
         <div class="viz-bar">
-          <span class="viz-badge emerald">4. KANIT & GROUNDING</span>
-          <h4>Cümle Bazlı Olgusal Kanıt & Doküman Eşleşme İnceleyicisi</h4>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="viz-badge emerald">4. KANIT & GROUNDING</span>
+            <h4>Cümle Bazlı Olgusal Kanıt & Doküman Eşleşme İnceleyicisi</h4>
+          </div>
+          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox4')">⛶</button>
         </div>
         <div id="groundingProofExplorer" class="chart-canvas scrollable-canvas"></div>
       </div>
@@ -180,7 +195,8 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
       <div class="chat-header-bar">
         <div class="chat-status-indicator">
           <span class="pulse-dot"></span>
-          <span><strong>Klinik Karar Destek Asistanı</strong> (Canlı RAG & Dozaj Denetimi Aktif)</span>
+          <span><strong>Klinik Karar Destek Asistanı</strong></span>
+          <span id="chatActiveDocBadge" style="margin-left:0.6rem; font-size:0.7rem; color:#38bdf8; background:rgba(56,189,248,0.12); padding:0.2rem 0.5rem; border-radius:4px; border:1px solid rgba(56,189,248,0.3);">📄 Aktif Belge: Varsayılan Klinik Korpus</span>
         </div>
         <div class="quick-prompts">
           <button class="quick-btn" onclick="sendQuickPrompt('penicillin')">💊 Penisilin Kontrendikasyonu</button>
@@ -204,7 +220,9 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
 
       <div class="chat-input-wrapper">
         <div class="chat-input-box">
-          <textarea id="chatInputText" placeholder="Klinik sorunuzu yazın (Örn: Şiddetli penisilin alerjisinde hangi antibiyotik alternatiftir?)" rows="2" onkeydown="handleChatKeyDown(event)"></textarea>
+          <input type="file" id="chatDirectFileInput" style="display:none;" accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
+          <button class="chat-attach-btn" title="PDF / Prospektüs / Belge Yükle" onclick="document.getElementById('chatDirectFileInput').click()">📎</button>
+          <textarea id="chatInputText" placeholder="Klinik sorunuzu yazın (Örn: Parol ne için kullanılır veya yetişkin dozu nedir?)" rows="2" onkeydown="handleChatKeyDown(event)"></textarea>
           <button id="sendChatBtn" class="send-msg-btn" onclick="sendChatMessage()">
             <span>Gönder</span> ➔
           </button>
@@ -261,12 +279,16 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
       <!-- Active Sentence Highlighting / Source Proof Card -->
       <div class="proof-inspection-card">
         <div class="card-head">
-          <span class="side-tag">CANLI KANIT PARLATICISI</span>
+          <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+            <span class="side-tag">CANLI KANIT PARLATICISI</span>
+            <span id="activeLineIndicator" style="font-family:var(--font-mono); font-size:0.65rem; color:#38bdf8; font-weight:bold;"></span>
+          </div>
           <h4>Vurgulanan Cümle ve Kaynak PDF</h4>
         </div>
         <div id="activeSentenceProofContent" class="proof-content-box">
           <span class="placeholder-text">Yanıttaki herhangi bir cümlenin üzerine gelin veya tıklayın; cümlenin dayandığı kaynak PDF sayfası burada parlayacaktır.</span>
         </div>
+        <button id="openDocViewerBtn" class="view-source-line-btn" style="display:none;" onclick="openSourceDocViewer()">📖 PDF'te Bu Satıra Git & İncele</button>
       </div>
 
       <!-- Hardware Timers & DirectML GPU Footprint -->
@@ -279,6 +301,20 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
           <div class="hw-pill"><span>BM25 Sparse:</span> <strong id="inspBm25Ms">0.0 ms</strong></div>
           <div class="hw-pill"><span>SIMD Cosine:</span> <strong id="inspSimdMs">0.0 ms</strong></div>
           <div class="hw-pill"><span>GPU Re-Rank:</span> <strong id="inspGpuMs" style="color:#f59e0b;">0.0 ms</strong></div>
+        </div>
+      </div>
+
+      <!-- Live Decision & Reasoning Pipeline Trace -->
+      <div class="decision-trace-card">
+        <div class="hw-mini-header">
+          <span>🧠 <strong>Adım Adım Karar & Yürütme Günlüğü</strong> (Soru ➔ Yanıt)</span>
+        </div>
+        <div id="decisionPipelineSteps" class="decision-steps-list">
+          <div class="step-item done"><span class="step-num">1</span> <span class="step-txt">Doküman İndeksi & Soru Vektörizasyonu</span> <span class="step-badge green">CPU SIMD</span></div>
+          <div class="step-item done"><span class="step-num">2</span> <span class="step-txt">Hibrit Arama & RRF Füzyon</span> <span class="step-badge cyan">BM25+Dense</span></div>
+          <div class="step-item done"><span class="step-num">3</span> <span class="step-txt">RTX 4060 Ti DirectML Cross-Encoder</span> <span class="step-badge yellow">GPU Top-5</span></div>
+          <div class="step-item done"><span class="step-num">4</span> <span class="step-txt">Ollama Qwen 2.5 7B Klinik Üretim</span> <span class="step-badge purple">Local LLM</span></div>
+          <div class="step-item done"><span class="step-num">5</span> <span class="step-txt">Olgusal Grounding & Dozaj Kilidi</span> <span class="step-badge green">Guardrail</span></div>
         </div>
       </div>
 
@@ -345,8 +381,67 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
       </div>
 
       <div class="modal-footer">
-        <span class="footer-note">4 Zorlu Senaryo (Factual, Self-Correction, Tuzak Soru, Halüsinasyon) C# Agentic Supervisor ile koşturulur.</span>
-        <button id="runBenchmarkBtn" class="run-benchmark-btn" onclick="runLiveBenchmark()">⚡ TESTLERİ KOŞTUR</button>
+        <button id="runBenchmarkBtn" class="primary-btn pulse-anim" onclick="runLiveBenchmark()">🚀 Testi Başlat (Canlı 4 Ajan Koşusu)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chunk Explorer Modal Window -->
+  <div id="chunksModal" class="benchmark-modal-backdrop" style="display: none;">
+    <div class="benchmark-modal-card" style="max-width: 900px;">
+      <div class="modal-header">
+        <div class="modal-title-box">
+          <span class="lab-icon">📑</span>
+          <div>
+            <h3 id="chunksModalTitle">PDF / Doküman Chunk Ayrıştırma İnceleyicisi</h3>
+            <span id="chunksModalSub" class="modal-sub">Metin parçaları, sayfa etiketleri ve token istatistikleri</span>
+          </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeChunksModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="cases-table-container">
+          <table class="benchmark-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Bölüm / Sayfa</th>
+                <th>Karakter / Boyut</th>
+                <th>Ayrıştırılmış Chunk İçeriği</th>
+              </tr>
+            </thead>
+            <tbody id="chunksTableTbody">
+              <tr><td colspan="4" style="text-align:center; padding: 2rem; color:#64748b;">Henüz bir doküman yüklenmedi.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Source Document Line Viewer Modal Window -->
+  <div id="sourceDocModal" class="benchmark-modal-backdrop" style="display: none;">
+    <div class="benchmark-modal-card" style="max-width: 1000px; height: 86vh;">
+      <div class="modal-header">
+        <div class="modal-title-box">
+          <span class="lab-icon">📖</span>
+          <div>
+            <h3 id="sourceDocModalTitle">Kaynak PDF Doküman İnceleyicisi</h3>
+            <span id="sourceDocModalSub" class="modal-sub">Vurgulanan cümlenin PDF'teki tam satırı ve paragraf konumu</span>
+          </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeSourceDocModal()">✕</button>
+      </div>
+
+      <div class="modal-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
+        <div class="doc-viewer-toolbar">
+          <span id="docViewerTargetBadge" class="doc-target-badge">📍 Hedef: Satır #1</span>
+          <span class="doc-target-tip">💡 Eşleşen satır altın sarısı ile parlar ve sayfa otomatik olarak o satıra kaydırılır.</span>
+        </div>
+        <div id="sourceDocLinesContainer" class="doc-lines-viewer">
+          <!-- Lines rendered dynamically with line numbers -->
+        </div>
       </div>
     </div>
   </div>

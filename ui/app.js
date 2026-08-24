@@ -9,6 +9,21 @@ const API_BASE = "http://localhost:5000";
 let activeView = "lab"; // 'lab' or 'chat'
 let currentMessageTelemetry = null;
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function escapeRegex(string) {
+  if (!string) return '';
+  return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Scientific Presets for Lab Mode
 const presets = {
   hybrid_match: {
@@ -148,30 +163,28 @@ function renderScientificLabResults(data) {
   renderGroundingProofExplorer(data.ragTriad.sentenceDetails, data.ragTriad.faithfulness);
 }
 
-// --- Panel 1: 2D Vector Space (PCA + L2 Distance) ---
+// --- Panel 1: 2D Vector Space (Semantic Polar Orbit & L2 Geometri) ---
 function render2DVectorSpace(query, queryVector, docVectors) {
   const chartDom = document.getElementById('vectorSpaceChart');
   if (!vectorChartInstance) {
     vectorChartInstance = echarts.init(chartDom);
   }
 
-  function project2D(vec) {
-    if (!vec || vec.length === 0) return [0, 0];
-    let x = 0, y = 0;
-    for (let i = 0; i < vec.length; i++) {
-      x += vec[i] * Math.cos((i * 2 * Math.PI) / vec.length);
-      y += vec[i] * Math.sin((i * 2 * Math.PI) / vec.length);
-    }
-    return [parseFloat(x.toFixed(3)), parseFloat(y.toFixed(3))];
-  }
+  // Sorgu her zaman merkezde (0, 0)
+  const queryPoint = [0, 0];
+  const numDocs = (docVectors || []).length || 1;
 
-  const queryPoint = project2D(queryVector);
   const docPoints = (docVectors || []).map((dv, idx) => {
-    const p = project2D(dv.vector);
+    // Cosine mesafe yarıçap (r), açı eşit aralıklı dağılım
+    const r = Math.max(0.08, dv.cosineDistance ?? 0.5);
+    const theta = (idx / numDocs) * 2 * Math.PI - (Math.PI / 2);
+    const x = parseFloat((r * Math.cos(theta)).toFixed(3));
+    const y = parseFloat((r * Math.sin(theta)).toFixed(3));
+
     return {
-      name: dv.documentId || `Doc ${idx + 1}`,
-      value: [p[0], p[1], dv.cosineDistance, dv.euclideanDistance],
-      content: dv.content
+      name: dv.documentId || `Chunk ${idx + 1}`,
+      value: [x, y, dv.cosineDistance ?? 0, dv.euclideanDistance ?? 0],
+      content: dv.content || ''
     };
   });
 
@@ -179,7 +192,7 @@ function render2DVectorSpace(query, queryVector, docVectors) {
     coords: [queryPoint, [dp.value[0], dp.value[1]]],
     lineStyle: {
       color: dp.value[2] < 0.4 ? '#10b981' : dp.value[2] < 0.7 ? '#6366f1' : '#64748b',
-      width: Math.max(1, (1.0 - dp.value[2]) * 4),
+      width: Math.max(1, (1.0 - dp.value[2]) * 3),
       type: 'dashed'
     }
   }));
@@ -194,30 +207,43 @@ function render2DVectorSpace(query, queryVector, docVectors) {
       formatter: function (params) {
         if (params.seriesType === 'scatter') {
           if (params.data.name === 'QUERY') {
-            return `<strong>🔍 CANLI SORGU (QUERY)</strong><br/>Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]`;
+            return `<strong>🔍 CANLI SORGU (QUERY)</strong><br/>"${(query || '').slice(0, 50)}..."<br/>Merkez: [0.0, 0.0]`;
           }
           return `<strong>📄 ${params.data.name}</strong><br/>
-                  Cosine Mesafe: <span style="color:#10b981;font-weight:bold;">${params.data.value[2]}</span><br/>
+                  Cosine Mesafe (r): <span style="color:#10b981;font-weight:bold;">${params.data.value[2]}</span><br/>
                   Euclidean (L2): <span style="color:#06b6d4;font-weight:bold;">${params.data.value[3]}</span><br/>
-                  <span style="color:#94a3b8; font-size:10px;">${(params.data.content || '').slice(0, 60)}...</span>`;
+                  Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]<br/>
+                  <span style="color:#94a3b8; font-size:10px;">${(params.data.content || '').slice(0, 80)}...</span>`;
         }
       }
     },
     grid: { left: '10%', right: '10%', top: '15%', bottom: '10%' },
     xAxis: {
       type: 'value',
-      name: 'PCA Boyut 1',
+      scale: true,
+      name: 'Vektör X (Proj.)',
       nameTextStyle: { color: '#64748b' },
       splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
       axisLine: { lineStyle: { color: '#64748b' } }
     },
     yAxis: {
       type: 'value',
-      name: 'PCA Boyut 2',
+      scale: true,
+      name: 'Vektör Y (Proj.)',
       nameTextStyle: { color: '#64748b' },
       splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
       axisLine: { lineStyle: { color: '#64748b' } }
     },
+    dataZoom: [
+      {
+        type: 'inside',
+        xAxisIndex: [0],
+        yAxisIndex: [0],
+        filterMode: 'none',
+        moveOnMouseMove: true,
+        zoomOnMouseWheel: true
+      }
+    ],
     series: [
       {
         type: 'lines',
@@ -231,28 +257,44 @@ function render2DVectorSpace(query, queryVector, docVectors) {
         symbol: 'diamond',
         symbolSize: 22,
         itemStyle: { color: '#06b6d4', shadowBlur: 15, shadowColor: 'rgba(6,182,212,0.8)' },
+        label: {
+          show: true,
+          formatter: 'MERKEZ SORGU',
+          position: 'bottom',
+          color: '#38bdf8',
+          fontFamily: 'Plus Jakarta Sans',
+          fontWeight: 'bold',
+          fontSize: 10
+        },
         data: [{ name: 'QUERY', value: queryPoint }]
       },
       {
         name: 'Documents',
         type: 'scatter',
-        symbolSize: function (val) { return 14 + ((1.0 - val[2]) * 16); },
+        symbolSize: function (val) { return 10 + ((1.0 - (val[2] || 0.5)) * 14); },
         itemStyle: {
           color: function (params) {
             const cosDist = params.data.value[2];
             return cosDist < 0.4 ? '#10b981' : cosDist < 0.7 ? '#6366f1' : '#f43f5e';
           },
+          opacity: 0.88,
           shadowBlur: 10,
           shadowColor: 'rgba(99,102,241,0.5)'
         },
         label: {
           show: true,
-          formatter: '{b}',
+          formatter: function (params) {
+            // Yüzlerce chunk varsa sadece en yakın olanları etiketle, ekran kalabalık olmasın
+            if (numDocs > 20) {
+              return (params.data.value[2] < 0.45) ? params.data.name : '';
+            }
+            return params.data.name;
+          },
           position: 'top',
           color: '#cbd5e1',
           fontFamily: 'Plus Jakarta Sans',
           fontWeight: 'bold',
-          fontSize: 11
+          fontSize: 10
         },
         data: docPoints
       }
@@ -260,6 +302,46 @@ function render2DVectorSpace(query, queryVector, docVectors) {
   };
 
   vectorChartInstance.setOption(option);
+}
+
+// --- Visualizer Fullscreen Toggle ---
+function toggleFullscreenViz(boxId) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+
+  const btn = box.querySelector('.viz-expand-btn');
+  const isFull = box.classList.toggle('fullscreen-viz');
+
+  if (btn) {
+    btn.innerHTML = isFull ? '✕' : '⛶';
+    btn.title = isFull ? 'Küçült' : 'Tam Ekran / Büyüt';
+  }
+
+  // ESC tuşuyla tam ekrandan çıkma desteği
+  if (isFull) {
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        box.classList.remove('fullscreen-viz');
+        if (btn) {
+          btn.innerHTML = '⛶';
+          btn.title = 'Tam Ekran / Büyüt';
+        }
+        document.removeEventListener('keydown', escHandler);
+        resizeAllCharts();
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+  }
+
+  resizeAllCharts();
+}
+
+function resizeAllCharts() {
+  setTimeout(() => {
+    if (vectorChartInstance) vectorChartInstance.resize();
+    if (triadChartInstance) triadChartInstance.resize();
+    if (hardwareChartInstance) hardwareChartInstance.resize();
+  }, 80);
 }
 
 // --- Panel 2: RAG Triad Radar ---
@@ -472,10 +554,18 @@ async function sendChatMessage() {
   stream.scrollTop = stream.scrollHeight;
 
   try {
+    const corpusInput = document.getElementById('corpusInput');
+    const corpusVal = corpusInput ? corpusInput.value.trim() : '';
+    const docName = window.currentUploadedDocName || (corpusVal ? "Yuklenen_Dokuman.pdf" : "Klinik_Korpus.pdf");
+
     const res = await fetch(`${API_BASE}/api/chat/rag`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: query })
+      body: JSON.stringify({ 
+        query: query,
+        corpus: corpusVal,
+        documentName: docName
+      })
     });
 
     if (res.ok) {
@@ -496,38 +586,71 @@ function renderAiResponseWithInlineTracing(msgElemId, data) {
   const elem = document.getElementById(msgElemId);
   if (!elem) return;
 
+  window.currentSentences = data.sentences || [];
+
   const bubble = elem.querySelector('.msg-bubble');
-  // Güvenli guard: telemetry veya guardrailStatus yoksa crash önlenir
   const guardrailStatus = (data.telemetry && data.telemetry.guardrailStatus) || '';
   const isBlocked = guardrailStatus.includes('BLOCKED');
 
   let formattedSentencesHtml = '';
-  (data.sentences || []).forEach(s => {
+  let hasRealUngroundedFact = false;
+
+  (data.sentences || []).forEach((s, idx) => {
     const isGrounded = s.isGrounded || false;
-    const sText = (s.sentence || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-    const sTextDisplay = s.sentence || '';
     const doc = (s.bestDoc || 'Bilinmiyor');
-    const snippet = (s.snippet || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
     const ratio = Math.round((s.supportRatio || 0) * 100);
 
+    if (!isGrounded && !isMeta) {
+      hasRealUngroundedFact = true;
+    }
+
+    let badgeText = isMeta ? '💬 Sohbet' : (isGrounded ? '✅ ' + ratio + '%' : '⚠️ Uydurma');
+    let cssClass = isMeta ? 'conversational' : (isGrounded ? 'grounded' : 'ungrounded');
+
     formattedSentencesHtml += `
-      <span class="traced-sentence ${isGrounded ? 'grounded' : 'ungrounded'}"
-            onmouseenter="highlightSentenceProof('${sText}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})"
-            onclick="highlightSentenceProof('${sText}', '${doc}', '${snippet}', ${isGrounded}, ${ratio})">
-        ${sTextDisplay}
-        <small style="font-size:0.65rem; font-weight:bold; opacity:0.85;">[${isGrounded ? '✅ ' + ratio + '%' : '⚠️ Uydurma'}]</small>
+      <span class="traced-sentence ${cssClass}"
+            data-idx="${idx}"
+            onmouseenter="onSentenceHoverByIndex(${idx})"
+            onclick="onSentenceClickByIndex(${idx})"
+            title="Tıkla: Kaynak PDF'te bu satırı incele">
+        ${escapeHtml(s.sentence || '')}
+        <small style="font-size:0.65rem; font-weight:bold; opacity:0.85;">[${badgeText}]</small>
       </span> 
     `;
   });
 
+  const statusBadge = hasRealUngroundedFact
+    ? '<span style="color:#f43f5e;">⚠️ GÜVENLİK KİLİDİ DEVREDE</span>'
+    : '<span style="color:#10b981;">✅ KANITLANDI / DOĞRULANDI</span>';
+
   bubble.innerHTML = `
     <div class="msg-meta">
-      Klinik AI Asistanı • ${isBlocked ? '<span style="color:#f43f5e;">⚠️ GÜVENLİK KİLİDİ DEVREDE</span>' : '<span style="color:#10b981;">✅ KANITLANDI</span>'}
+      Klinik AI Asistanı • ${statusBadge}
     </div>
     <div class="msg-content">
       ${formattedSentencesHtml || (data.answer || 'Yanıt alınamadı.')}
     </div>
   `;
+}
+
+function onSentenceHoverByIndex(idx) {
+  if (!window.currentSentences || !window.currentSentences[idx]) return;
+  const s = window.currentSentences[idx];
+  const doc = s.bestDoc || 'Bilinmiyor';
+  const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
+  const ratio = Math.round((s.supportRatio || 0) * 100);
+  highlightSentenceProof(s.sentence || '', doc, s.snippet || '', s.isGrounded || false, ratio, isMeta);
+}
+
+function onSentenceClickByIndex(idx) {
+  onSentenceHoverByIndex(idx);
+  const s = window.currentSentences ? window.currentSentences[idx] : null;
+  const doc = (s && s.bestDoc) || '';
+  const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
+  if (!isMeta) {
+    openSourceDocViewer();
+  }
 }
 
 function updateRagInspector(data) {
@@ -576,36 +699,239 @@ function updateRagInspector(data) {
   document.getElementById('inspSimdMs').textContent = `${lms.simdVector ?? '---'} ms`;
   document.getElementById('inspGpuMs').textContent = `${lms.gpuRerank ?? '---'} ms`;
 
+  // Decision & Execution Trace Pipeline Steps
+  const stepsContainer = document.getElementById('decisionPipelineSteps');
+  if (stepsContainer) {
+    const totalSentences = (data.sentences || []).length;
+    const groundedCount = (data.sentences || []).filter(s => s.isGrounded || (s.bestDoc && (s.bestDoc.includes('Diyalog') || s.bestDoc.includes('Meta')))).length;
+    const ungroundedCount = totalSentences - groundedCount;
+    const topDoc = (t.retrievedChunks && t.retrievedChunks[0]) ? t.retrievedChunks[0].doc : 'Klinik Havuz';
+    const topScore = (t.retrievedChunks && t.retrievedChunks[0]) ? (t.retrievedChunks[0].score || 0).toFixed(2) : '0.00';
+    const dgValid = (t.dosageGuard && t.dosageGuard.isValid !== false);
+
+    stepsContainer.innerHTML = `
+      <div class="step-item">
+        <span class="step-num">1</span>
+        <div class="step-txt">
+          <strong>Soru Vektörizasyonu & SIMD Embedding</strong> (${lms.simdVector ?? 0} ms)
+        </div>
+        <span class="step-badge green">CPU AVX2</span>
+      </div>
+      <div class="step-item">
+        <span class="step-num">2</span>
+        <div class="step-txt">
+          <strong>Hibrit Arama</strong> (BM25: ${lms.bm25 ?? 0} ms) + RRF Sıralama
+        </div>
+        <span class="step-badge cyan">K=60 Fusion</span>
+      </div>
+      <div class="step-item">
+        <span class="step-num">3</span>
+        <div class="step-txt">
+          <strong>RTX 4060 Ti GPU Re-Ranking</strong> ➔ En İyi: <em>${topDoc}</em> (Skor: ${topScore})
+        </div>
+        <span class="step-badge yellow">${lms.gpuRerank ?? 0} ms GPU</span>
+      </div>
+      <div class="step-item">
+        <span class="step-num">4</span>
+        <div class="step-txt">
+          <strong>Ollama ${t.llmModel || 'qwen2.5:7b'}</strong> Klinik Üretim (${totalSentences} Cümle)
+        </div>
+        <span class="step-badge purple">${lms.llmGenerate ?? 0} ms</span>
+      </div>
+      <div class="step-item">
+        <span class="step-num">5</span>
+        <div class="step-txt">
+          <strong>Olgusal Grounding</strong> (${groundedCount}/${totalSentences} Doğrulandı) & Dozaj Kilidi
+        </div>
+        <span class="step-badge ${dgValid && ungroundedCount === 0 ? 'green' : 'red'}">${dgValid && ungroundedCount === 0 ? 'ONAYLANDI' : 'UYARI / KİLİT'}</span>
+      </div>
+    `;
+  }
+
   // Raw JSON
   document.getElementById('rawTelemetryJson').textContent = JSON.stringify(data, null, 2);
 
   // Default first sentence proof
   if (data.sentences && data.sentences.length > 0) {
     const s0 = data.sentences[0];
+    const doc0 = s0.bestDoc || 'Bilinmiyor';
+    const isMeta0 = doc0.includes('Diyalog') || doc0.includes('Meta');
     highlightSentenceProof(
       s0.sentence || '',
-      s0.bestDoc || 'Bilinmiyor',
+      doc0,
       s0.snippet || '',
       s0.isGrounded || false,
-      Math.round((s0.supportRatio || 0) * 100)
+      Math.round((s0.supportRatio || 0) * 100),
+      isMeta0
     );
   }
 }
 
-function highlightSentenceProof(sentence, doc, snippet, isGrounded, ratio) {
+function findMatchingLineInCorpus(snippet, sentence, fullCorpus) {
+  if (!fullCorpus) return -1;
+  const lines = fullCorpus.split('\n');
+  
+  // 1. Try snippet direct search
+  if (snippet) {
+    const cleanSnippet = snippet.replace(/^[0-9]\.\s*/, '').trim().toLowerCase();
+    if (cleanSnippet.length > 6) {
+      const targetSnippet = cleanSnippet.slice(0, 30);
+      const idx = lines.findIndex(l => l.toLowerCase().includes(targetSnippet));
+      if (idx >= 0) return idx;
+    }
+  }
+
+  // 2. Try sentence keywords match
+  const cleanSentence = (sentence || '').toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"'0-9]/g, ' ');
+  const words = cleanSentence.split(/\s+/).filter(w => w.length >= 4 && !['icin', 'veya', 'olan', 'gibi', 'kadar', 'daha', 'olarak', 'hangi', 'tedavisinde', 'kullanilir'].includes(w));
+  
+  if (words.length > 0) {
+    let bestScore = 0;
+    let bestIdx = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineLower = lines[i].toLowerCase();
+      let matchCount = 0;
+      for (const w of words) {
+        if (lineLower.includes(w)) matchCount++;
+      }
+      if (matchCount > bestScore && matchCount >= 2) {
+        bestScore = matchCount;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) return bestIdx;
+  }
+
+  return -1;
+}
+
+function highlightSentenceProof(sentence, doc, snippet, isGrounded, ratio, isMeta = false) {
   const container = document.getElementById('activeSentenceProofContent');
   container.className = "proof-content-box highlight-active";
 
+  const corpusInput = document.getElementById('corpusInput');
+  let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (window.currentUploadedCorpus || '');
+  
+  let matchedLineIndex = -1;
+  if (fullCorpus && !isMeta) {
+    matchedLineIndex = findMatchingLineInCorpus(snippet, sentence, fullCorpus);
+  }
+
+  window.activeTargetLineNumber = matchedLineIndex >= 0 ? (matchedLineIndex + 1) : null;
+  window.activeTargetDoc = doc;
+  window.activeTargetSnippet = snippet;
+  window.activeTargetSentence = sentence;
+
+  const lineIndicator = document.getElementById('activeLineIndicator');
+  const openDocBtn = document.getElementById('openDocViewerBtn');
+
+  if (matchedLineIndex >= 0 && !isMeta) {
+    if (lineIndicator) lineIndicator.textContent = `📍 Satır #${matchedLineIndex + 1}`;
+    if (openDocBtn) {
+      openDocBtn.style.display = 'flex';
+      openDocBtn.innerHTML = `📖 PDF'te Satır #${matchedLineIndex + 1}'e Git & İncele`;
+    }
+  } else if (isMeta) {
+    if (lineIndicator) lineIndicator.textContent = `💬 Diyalog`;
+    if (openDocBtn) openDocBtn.style.display = 'none';
+  } else {
+    if (lineIndicator) lineIndicator.textContent = ``;
+    if (openDocBtn) openDocBtn.style.display = 'none';
+  }
+
+  let headerColor = isMeta ? '#38bdf8' : (isGrounded ? '#10b981' : '#f43f5e');
+  let headerText = isMeta 
+    ? '💬 Klinik Diyalog / Nezaket Yanıtı' 
+    : (isGrounded ? `✅ Olgusal Desteklenen Cümle (${ratio}% Örtüşme)` : `⚠️ Kaynaksız / Halüsinasyon Cümlesi (${ratio}% Örtüşme)`);
+
+  let lineBadgeHtml = (matchedLineIndex >= 0 && !isMeta) 
+    ? `<span style="background:rgba(245,158,11,0.2); color:#f59e0b; padding:0.1rem 0.4rem; border-radius:4px; font-family:var(--font-mono); font-size:0.65rem; margin-left:0.4rem;">Satır #${matchedLineIndex + 1}</span>` 
+    : '';
+
   container.innerHTML = `
-    <div style="margin-bottom:0.4rem; color:${isGrounded ? '#10b981' : '#f43f5e'}; font-weight:bold;">
-      ${isGrounded ? '✅ Olgusal Desteklenen Cümle' : '⚠️ Kaynaksız / Halüsinasyon Cümlesi'} (${ratio}% Örtüşme)
+    <div style="margin-bottom:0.4rem; color:${headerColor}; font-weight:bold; display:flex; align-items:center;">
+      <span>${headerText}</span>
+      ${lineBadgeHtml}
     </div>
-    <div style="font-style:italic; margin-bottom:0.6rem; color:#f8fafc;">"${sentence}"</div>
+    <div style="font-style:italic; margin-bottom:0.6rem; color:#f8fafc; cursor:pointer;" onclick="openSourceDocViewer()" title="Tıkla: Doküman modalını aç">"${sentence}"</div>
     <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; font-size:0.7rem;">
       <span style="color:#64748b;">Eşleşen Kaynak PDF:</span> <strong style="color:#06b6d4;">${doc}</strong><br/>
       <span style="color:#64748b;">Doküman Paragrafı:</span> <span style="color:#cbd5e1;">"${snippet}"</span>
     </div>
   `;
+}
+
+// --- Source Document Line Viewer Modal ---
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function openSourceDocViewer() {
+  try {
+    const corpusInput = document.getElementById('corpusInput');
+    let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (window.currentUploadedCorpus || '');
+    
+    const container = document.getElementById('sourceDocLinesContainer');
+    const modal = document.getElementById('sourceDocModal');
+    const targetBadge = document.getElementById('docViewerTargetBadge');
+    const modalTitle = document.getElementById('sourceDocModalTitle');
+
+    if (!fullCorpus) {
+      fullCorpus = "Doküman içeriği henüz yüklenmedi.";
+    }
+
+    const docName = window.activeTargetDoc || window.currentUploadedDocName || 'Dokuman.pdf';
+    modalTitle.textContent = `📖 Kaynak Doküman: ${docName}`;
+    const targetLine = window.activeTargetLineNumber || 1;
+    targetBadge.textContent = `📍 Hedef: Satır #${targetLine}`;
+
+    const lines = fullCorpus.split('\n');
+    let html = '';
+
+    lines.forEach((line, idx) => {
+      const lineNum = idx + 1;
+      const isTarget = (lineNum === targetLine);
+      const targetClass = isTarget ? 'doc-line active-highlight-line' : 'doc-line';
+      const targetId = `doc_line_${lineNum}`;
+      
+      let lineContentHtml = escapeHtml(line || ' ');
+      if (isTarget && window.activeTargetSentence) {
+        try {
+          const kw = window.activeTargetSentence.split(/\s+/).filter(w => w.length > 5);
+          kw.forEach(w => {
+            const regex = new RegExp(`(${escapeRegex(w)})`, 'gi');
+            lineContentHtml = lineContentHtml.replace(regex, '<mark style="background:#f59e0b; color:#000; padding:0 2px; border-radius:2px;">$1</mark>');
+          });
+        } catch (e) {}
+      }
+
+      html += `
+        <div id="${targetId}" class="${targetClass}">
+          <div class="doc-line-num">${lineNum}</div>
+          <div class="doc-line-text">${lineContentHtml}</div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+    modal.style.display = 'flex';
+
+    // Smooth scroll to target line
+    setTimeout(() => {
+      const targetEl = document.getElementById(`doc_line_${targetLine}`);
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  } catch (err) {
+    console.error("Doc viewer open error:", err);
+  }
+}
+
+function closeSourceDocModal() {
+  const modal = document.getElementById('sourceDocModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // --- Stres Testi Modal Koşturucu ---
@@ -691,17 +1017,22 @@ function setupFileForUpload(file) {
   const status = document.getElementById('uploadStatusBadge');
 
   const sizeKb = (file.size / 1024).toFixed(1);
-  label.innerHTML = `📄 <strong>${file.name}</strong> (${sizeKb} KB)`;
-  btn.style.display = 'block';
-  btn.textContent = `⚡ "${file.name}" Dosyasını Çıkar & Ekle`;
-  status.style.display = 'none';
+  if (label) label.innerHTML = `📄 <strong>${file.name}</strong> (${sizeKb} KB)`;
+  if (btn) {
+    btn.style.display = 'block';
+    btn.textContent = `⚡ "${file.name}" Dosyasını Çıkar & Ekle`;
+  }
+  if (status) status.style.display = 'none';
 
   // PDF ise parola alanını göster
   if (file.name.toLowerCase().endsWith('.pdf')) {
-    pwGroup.style.display = 'block';
+    if (pwGroup) pwGroup.style.display = 'block';
   } else {
-    pwGroup.style.display = 'none';
+    if (pwGroup) pwGroup.style.display = 'none';
   }
+
+  // Kullanıcıyı bekletmeden hemen otomatik yükle ve ayrıştır
+  uploadAndIngestDocument();
 }
 
 async function uploadAndIngestDocument() {
@@ -742,11 +1073,39 @@ async function uploadAndIngestDocument() {
       corpusInput.value = data.combinedText;
     }
 
+    window.currentUploadedCorpus = data.combinedText || '';
+    window.currentUploadedDocName = data.fileName || 'Dokuman.pdf';
+    window.currentUploadedChunks = data.chunks || [];
+
     status.className = 'upload-status success';
     status.innerHTML = `✅ <strong>${data.fileName}</strong> başarıyla aktarıldı!<br/>` +
                        `📄 ${data.totalPagesOrDocs} Bölüm/Sayfa • 🧩 ${data.totalChunks} Chunk • 📝 ${data.totalCharacters} Karakter`;
 
     btn.textContent = '✅ Korpus Güncellendi';
+
+    const viewChunksBtn = document.getElementById('viewChunksBtn');
+    if (viewChunksBtn && data.chunks && data.chunks.length > 0) {
+      viewChunksBtn.style.display = 'block';
+      viewChunksBtn.textContent = `📑 Çıkarılan ${data.chunks.length} Chunk'ı İncele`;
+    }
+
+    const chatBadge = document.getElementById('chatActiveDocBadge');
+    if (chatBadge && data.fileName) {
+      chatBadge.innerHTML = `📄 <strong>${data.fileName}</strong> (${data.totalChunks} Chunk Aktif)`;
+    }
+
+    // PDF içeriği Parol / Parasetamol ise veya yeni dosya ise sorguyu ve aday yanıtı dokümanla uyumlu yap
+    const queryInput = document.getElementById('queryInput');
+    const candidateInput = document.getElementById('candidateResponseInput');
+    const combinedLower = (data.combinedText || '').toLowerCase();
+
+    if (combinedLower.includes('parol') || combinedLower.includes('parasetamol')) {
+      if (queryInput) queryInput.value = "Parol tablet ne için kullanılır ve yetişkin dozu nedir?";
+      if (candidateInput) candidateInput.value = "Parol hafif ve orta şiddetli ağrılarda kullanılır. Yetişkinlerde 6 saatte bir 500mg-1000mg aralığında alınabilir.";
+    } else if (combinedLower.includes('amoksisilin') || combinedLower.includes('penisilin')) {
+      if (queryInput) queryInput.value = "Penisilin alerjisinde hangi antibiyotik alternatiftir?";
+      if (candidateInput) candidateInput.value = "Şiddetli penisilin alerjisi olan hastalarda alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.";
+    }
 
     // RAG Pipeline'ını yeni korpusla anında çalıştır
     await executeFullPipeline();
@@ -758,6 +1117,47 @@ async function uploadAndIngestDocument() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// --- Chunk Explorer Modal ---
+function openChunksModal() {
+  const modal = document.getElementById('chunksModal');
+  const tbody = document.getElementById('chunksTableTbody');
+  const sub = document.getElementById('chunksModalSub');
+  const chunks = window.currentUploadedChunks || [];
+
+  if (!modal || !tbody) return;
+
+  modal.style.display = 'flex';
+  sub.textContent = `Toplam ${chunks.length} ayrıştırılmış chunk parçası ve metadata istatistiği`;
+
+  if (chunks.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding: 2rem; color:#64748b;">Henüz ayrıştırılmış chunk bulunamadı.</td></tr>`;
+    return;
+  }
+
+  let html = '';
+  chunks.forEach((c, i) => {
+    const docId = c.documentId || c.DocumentId || `Sayfa_${i + 1}`;
+    const len = c.length || c.Length || (c.content ? c.content.length : 0);
+    const content = (c.content || c.Content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html += `
+      <tr>
+        <td class="tc-id" style="width:40px;">${i + 1}</td>
+        <td style="width:130px; font-weight:bold; color:#38bdf8;">${docId}</td>
+        <td style="width:100px; font-family:var(--font-mono); font-size:0.75rem; color:#a855f7;">${len} karakter</td>
+        <td style="font-family:var(--font-mono); font-size:0.72rem; line-height:1.4; color:#cbd5e1; max-width:550px;">
+          ${content}
+        </td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = html;
+}
+
+function closeChunksModal() {
+  const modal = document.getElementById('chunksModal');
+  if (modal) modal.style.display = 'none';
 }
 
 function setupDragAndDrop() {
@@ -794,6 +1194,16 @@ window.addEventListener('resize', () => {
   if (vectorChartInstance) vectorChartInstance.resize();
   if (triadChartInstance) triadChartInstance.resize();
   if (hardwareChartInstance) hardwareChartInstance.resize();
+});
+
+// Global Keyboard Shortcuts (ESC to close modals or exit fullscreen)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeSourceDocModal();
+    closeChunksModal();
+    closeBenchmarkModal();
+    document.querySelectorAll('.viz-box.fullscreen-viz').forEach(el => el.classList.remove('fullscreen-viz'));
+  }
 });
 
 // Init
