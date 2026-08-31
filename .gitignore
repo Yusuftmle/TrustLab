@@ -22,3 +22,10 @@ BenchmarkDotNet.Artifacts/
 models/*.onnx
 models/*.bin
 
+## SQLite Local Database & Test Data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+test_pdfs/
+
+

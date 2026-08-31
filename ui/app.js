@@ -1,14 +1,53 @@
-// TrustLab Scientific RAG Workbench & Clinical Observability Assistant
-// Integrated with C# .NET 10 API, RTX 4060 Ti GPU & Grounding Guardrails
+/**
+ * TrustLab — Deterministic RAG & Guardrail Engine UI Controller
+ * High-performance scientific workbench & clinical observability assistant
+ */
 
-let vectorChartInstance = null;
-let triadChartInstance = null;
-let hardwareChartInstance = null;
-
+// ==========================================================================
+// 1. STATE & CONSTANTS
+// ==========================================================================
 const API_BASE = "http://localhost:5000";
-let activeView = "lab"; // 'lab' or 'chat'
-let currentMessageTelemetry = null;
 
+const state = {
+  activeView: 'lab', // default to lab/scientific view or chat
+  currentSentences: [],
+  currentTelemetry: null,
+  activeTargetDoc: null,
+  activeTargetSnippet: null,
+  activeTargetSentence: null,
+  activeTargetLineNumber: null,
+  uploadedDocName: null,
+  uploadedCorpus: null,
+  uploadedChunks: []
+};
+
+// Chart instances
+let vectorChart = null;
+let triadChart = null;
+let hardwareChart = null;
+
+// Presets for scientific evaluation
+const PRESETS = {
+  hybrid_match: {
+    query: "Penisilin alerjisinde hangi antibiyotik kontrendikedir?",
+    corpus: `Doküman 1: Şiddetli penisilin anafilaksi öyküsü olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir.\nDoküman 2: Alternatif olarak makrolid grubu antibiyotikler (Klaritromisin, Azitromisin) güvenle tercih edilebilir.\nDoküman 3: İtalyan mutfağında spagetti yaparken tenceredeki su kaynadıktan sonra tuz atılmalıdır.`,
+    candidate: "Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir."
+  },
+  exact_keyword: {
+    query: "CS0234 namespace TrustLab Rag eksik assembly hatası",
+    corpus: `Doküman 1: Derleyici hatası CS0234: The type or namespace name 'Rag' does not exist in the namespace 'TrustLab' assembly referansı eklenerek çözülür.\nDoküman 2: C# projelerinde Clean Architecture katmanları arasındaki bağımlılıklar csproj referanslarıyla kurulur.\nDoküman 3: BM25 algoritması nadir anahtar kelimeleri ve hata kodlarını yüksek IDF değeri ile ödüllendirir.`,
+    candidate: "CS0234 hatası TrustLab Rag projesine assembly referansı eklenerek çözülür."
+  },
+  hallucination_trap: {
+    query: "TrustLab kullanıcı şifrelerini hangi bulut veritabanında saklar?",
+    corpus: `Doküman 1: TrustLab mimarisi tamamen yerel disk tabanlı in-memory vektör indeksleri ve BM25 depoları kullanır.\nDoküman 2: Güvenilirlik testleri için ExecutionTracer sınıfı milisaniye bazında gecikme ve token denetimi yapar.\nDoküman 3: Deterministik devre kesici, desteksiz iddialarda doğrudan güvenli fallback yanıtı üretir.`,
+    candidate: "TrustLab kullanıcı şifrelerini AWS DynamoDB ve Redis veritabanında 256-bit AES ile şifreleyerek bulutta saklar."
+  }
+};
+
+// ==========================================================================
+// 2. UTILITY FUNCTIONS
+// ==========================================================================
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -19,97 +58,167 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-function escapeRegex(string) {
-  if (!string) return '';
-  return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function escapeRegex(str) {
+  if (!str) return '';
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Scientific Presets for Lab Mode
-const presets = {
-  hybrid_match: {
-    query: "Penisilin alerjisinde hangi antibiyotik kontrendikedir?",
-    corpus: `Doküman 1: Şiddetli penisilin anafilaksi öyküsü olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir.
-Doküman 2: Alternatif olarak makrolid grubu antibiyotikler (Klaritromisin, Azitromisin) güvenle tercih edilebilir.
-Doküman 3: İtalyan mutfağında spagetti yaparken tenceredeki su kaynadıktan sonra tuz atılmalıdır.`,
-    candidate: "Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir."
+function formatNumber(num, decimals = 0) {
+  if (typeof num !== 'number' || isNaN(num)) return '---';
+  return num.toFixed(decimals);
+}
+
+function autoResizeTextarea(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+// ==========================================================================
+// 3. API CLIENT
+// ==========================================================================
+const api = {
+  async getStatus() {
+    const res = await fetch(`${API_BASE}/api/system/status`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
   },
-  exact_keyword: {
-    query: "CS0234 namespace TrustLab Rag eksik assembly hatası",
-    corpus: `Doküman 1: Derleyici hatası CS0234: The type or namespace name 'Rag' does not exist in the namespace 'TrustLab' assembly referansı eklenerek çözülür.
-Doküman 2: C# projelerinde Clean Architecture katmanları arasındaki bağımlılıklar csproj referanslarıyla kurulur.
-Doküman 3: BM25 algoritması nadir anahtar kelimeleri ve hata kodlarını yüksek IDF değeri ile ödüllendirir.`,
-    candidate: "CS0234 hatası TrustLab Rag projesine assembly referansı eklenerek çözülür."
+
+  async evaluateLab(payload) {
+    const res = await fetch(`${API_BASE}/api/lab/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
   },
-  hallucination_trap: {
-    query: "TrustLab kullanıcı şifrelerini hangi bulut veritabanında saklar?",
-    corpus: `Doküman 1: TrustLab mimarisi tamamen yerel disk tabanlı in-memory vektör indeksleri ve BM25 depoları kullanır.
-Doküman 2: Güvenilirlik testleri için ExecutionTracer sınıfı milisaniye bazında gecikme ve token denetimi yapar.
-Doküman 3: Deterministik devre kesici, desteksiz iddialarda doğrudan güvenli fallback yanıtı üretir.`,
-    candidate: "TrustLab kullanıcı şifrelerini AWS DynamoDB ve Redis veritabanında 256-bit AES ile şifreleyerek bulutta saklar."
+
+  async sendChat(query, corpus, documentName) {
+    const res = await fetch(`${API_BASE}/api/chat/rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: query,
+        corpus: corpus || undefined,
+        documentName: documentName || undefined
+      })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async runStressTest() {
+    const res = await fetch(`${API_BASE}/api/lab/stress-test`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async getDocuments() {
+    const res = await fetch(`${API_BASE}/api/documents/list`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async deleteDocument(id) {
+    const res = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async clearDocuments() {
+    const res = await fetch(`${API_BASE}/api/documents/clear`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  async uploadDocuments(files, password) {
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      formData.append('files', files[i]);
+    }
+    if (password) formData.append('password', password);
+
+    const res = await fetch(`${API_BASE}/api/documents/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Dosya yükleme başarısız');
+    return data;
   }
 };
 
-// 1. Health Check for C# Backend
+// ==========================================================================
+// 4. VIEW & NAVIGATION CONTROLLERS
+// ==========================================================================
 async function checkApiHealth() {
   const badge = document.getElementById('apiStatusBadge');
   const text = document.getElementById('apiStatusText');
   try {
-    const res = await fetch(`${API_BASE}/api/system/status`, { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      const data = await res.json();
-      badge.className = "api-status-badge";
-      // API camelCase döndürür: gpuDevice, simdHardwareAcceleration, onnxModelLoaded
-      const simd = data.simdHardwareAcceleration ? '⚡ SIMD AVX' : 'CPU';
-      const gpu = data.gpuDevice || 'CPU Fallback';
-      const onnx = data.onnxModelLoaded ? '🧠 ONNX' : '';
-      text.textContent = `🟢 .NET 10 | ${gpu} | ${simd} ${onnx}`;
-      return true;
-    } else {
-      throw new Error('API non-200');
-    }
+    const data = await api.getStatus();
+    badge.className = "status-indicator";
+    const gpu = data.gpuDevice ? data.gpuDevice.replace(' (DirectML)', '') : 'CPU';
+    text.textContent = `API Aktif • ${gpu}`;
+    return true;
   } catch (err) {
-    badge.className = "api-status-badge offline";
-    text.textContent = "🔴 C# API Kapalı — " + err.message;
+    badge.className = "status-indicator offline";
+    text.textContent = "API Çevrimdışı";
     return false;
   }
 }
 
-// 2. View Switcher: Lab Mode vs. Clinical Chat Mode
 function switchViewMode(mode) {
-  activeView = mode;
+  state.activeView = mode;
   const labTab = document.getElementById('tabLabMode');
   const chatTab = document.getElementById('tabChatMode');
   const labContainer = document.getElementById('labViewContainer');
   const chatContainer = document.getElementById('chatViewContainer');
 
-  if (mode === 'lab') {
-    labTab.classList.add('active');
-    chatTab.classList.remove('active');
-    labContainer.style.display = 'flex';
-    chatContainer.style.display = 'none';
-    setTimeout(() => {
-      if (vectorChartInstance) vectorChartInstance.resize();
-      if (triadChartInstance) triadChartInstance.resize();
-      if (hardwareChartInstance) hardwareChartInstance.resize();
-    }, 100);
-  } else {
+  if (mode === 'chat') {
     chatTab.classList.add('active');
     labTab.classList.remove('active');
+    chatContainer.style.display = 'grid';
     labContainer.style.display = 'none';
-    chatContainer.style.display = 'flex';
+  } else {
+    labTab.classList.add('active');
+    chatTab.classList.remove('active');
+    chatContainer.style.display = 'none';
+    labContainer.style.display = 'grid';
+    setTimeout(resizeAllCharts, 120);
   }
 }
 
-function loadExperimentPreset(presetKey) {
-  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-  if (event && event.target) event.target.classList.add('active');
+function togglePresetDropdown() {
+  const dropdown = document.getElementById('presetDropdown');
+  dropdown.classList.toggle('show');
+}
 
-  const p = presets[presetKey];
-  if (p) {
-    document.getElementById('queryInput').value = p.query;
-    document.getElementById('corpusInput').value = p.corpus;
-    document.getElementById('candidateResponseInput').value = p.candidate;
-    executeFullPipeline();
+// Close dropdown on click outside
+document.addEventListener('click', (e) => {
+  const wrapper = document.querySelector('.dropdown-wrapper');
+  const dropdown = document.getElementById('presetDropdown');
+  if (wrapper && !wrapper.contains(e.target) && dropdown) {
+    dropdown.classList.remove('show');
+  }
+});
+
+function loadExperimentPreset(presetKey) {
+  const p = PRESETS[presetKey];
+  if (!p) return;
+
+  const dropdown = document.getElementById('presetDropdown');
+  if (dropdown) dropdown.classList.remove('show');
+
+  document.getElementById('queryInput').value = p.query;
+  document.getElementById('corpusInput').value = p.corpus;
+  document.getElementById('candidateResponseInput').value = p.candidate;
+
+  executeFullPipeline();
+
+  const chatInput = document.getElementById('chatInputText');
+  if (chatInput) {
+    chatInput.value = p.query;
+    autoResizeTextarea(chatInput);
   }
 }
 
@@ -120,7 +229,9 @@ function updateParams() {
   executeFullPipeline();
 }
 
-// --- Lab Mode: Main Pipeline Execution ---
+// ==========================================================================
+// 5. SCIENTIFIC VISUALIZERS (Rich & High-Tech ECharts)
+// ==========================================================================
 async function executeFullPipeline() {
   const query = document.getElementById('queryInput').value.trim();
   const corpusRaw = document.getElementById('corpusInput').value.trim();
@@ -132,362 +243,428 @@ async function executeFullPipeline() {
   if (!query || !corpusRaw) return;
 
   try {
-    const response = await fetch(`${API_BASE}/api/lab/evaluate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: query,
-        corpus: corpusRaw,
-        candidateResponse: candidate,
-        rrfK: rrfK,
-        rerankThreshold: rerankThreshold,
-        dimensions: dimensions,
-        maxTokensPerChunk: 256,
-        overlapTokens: 32
-      })
+    const data = await api.evaluateLab({
+      query: query,
+      corpus: corpusRaw,
+      candidateResponse: candidate,
+      rrfK: rrfK,
+      rerankThreshold: rerankThreshold,
+      dimensions: dimensions,
+      maxTokensPerChunk: 256,
+      overlapTokens: 32
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      renderScientificLabResults(data);
-    }
+    renderVectorSpace(data.query, data.queryVector, data.docVectors);
+    renderRagTriad(data.ragTriad);
+    renderHardwareMetrics(data.hardwareProfiling, data.rankingMetrics);
+    renderGroundingExplorer(data.ragTriad.sentenceDetails, data.ragTriad.faithfulness);
   } catch (err) {
-    console.error("Evaluation API Error:", err);
+    console.error("Lab evaluation error:", err);
   }
 }
 
-function renderScientificLabResults(data) {
-  render2DVectorSpace(data.query, data.queryVector, data.docVectors);
-  renderRagTriadChart(data.ragTriad);
-  renderHardwareAndRankingChart(data.hardwareProfiling, data.rankingMetrics);
-  renderGroundingProofExplorer(data.ragTriad.sentenceDetails, data.ragTriad.faithfulness);
-}
+// 1. Vector Space & Cross-Document Topological Knowledge Graph
+function renderVectorSpace(query, queryVector, docVectors) {
+  const dom = document.getElementById('vectorSpaceChart');
+  if (!dom) return;
+  if (!vectorChart) vectorChart = echarts.init(dom);
 
-// --- Panel 1: 2D Vector Space (Semantic Polar Orbit & L2 Geometri) ---
-function render2DVectorSpace(query, queryVector, docVectors) {
-  const chartDom = document.getElementById('vectorSpaceChart');
-  if (!vectorChartInstance) {
-    vectorChartInstance = echarts.init(chartDom);
-  }
-
-  // Sorgu her zaman merkezde (0, 0)
   const queryPoint = [0, 0];
-  const numDocs = (docVectors || []).length || 1;
+  const docs = docVectors || [];
+  const numDocs = docs.length || 1;
 
-  const docPoints = (docVectors || []).map((dv, idx) => {
-    // Cosine mesafe yarıçap (r), açı eşit aralıklı dağılım
-    const r = Math.max(0.08, dv.cosineDistance ?? 0.5);
-    const theta = (idx / numDocs) * 2 * Math.PI - (Math.PI / 2);
-    const x = parseFloat((r * Math.cos(theta)).toFixed(3));
-    const y = parseFloat((r * Math.sin(theta)).toFixed(3));
+  // Distinct color palette per Document
+  const DOC_PALETTE = [
+    '#10b981', '#38bdf8', '#a855f7', '#f59e0b', '#ec4899', 
+    '#06b6d4', '#84cc16', '#eab308', '#f97316', '#6366f1', '#14b8a6'
+  ];
 
-    return {
-      name: dv.documentId || `Chunk ${idx + 1}`,
-      value: [x, y, dv.cosineDistance ?? 0, dv.euclideanDistance ?? 0],
-      content: dv.content || ''
-    };
+  // Group chunks by Document ID
+  const docGroups = {};
+  docs.forEach((dv, idx) => {
+    // Extract base doc name (e.g. PAROL-500.pdf_c1 -> PAROL-500.pdf)
+    let rawDocId = dv.documentId || `Chunk ${idx + 1}`;
+    let baseDoc = rawDocId.replace(/_c[0-9]+$/, '').replace(/#Sayfa_[0-9]+$/, '');
+    if (!docGroups[baseDoc]) {
+      docGroups[baseDoc] = [];
+    }
+    docGroups[baseDoc].push({ dv, originalIndex: idx });
   });
 
-  const linesData = docPoints.map(dp => ({
+  const uniqueDocs = Object.keys(docGroups);
+  const docColorMap = {};
+  uniqueDocs.forEach((dName, dIdx) => {
+    docColorMap[dName] = DOC_PALETTE[dIdx % DOC_PALETTE.length];
+  });
+
+  // Calculate clustered positions per document
+  const docPoints = [];
+  let currentAngle = -Math.PI / 2;
+  const angleStepPerDoc = (2 * Math.PI) / (uniqueDocs.length || 1);
+
+  uniqueDocs.forEach((dName, dIdx) => {
+    const group = docGroups[dName];
+    const docColor = docColorMap[dName];
+    const startAngle = currentAngle;
+    const groupAngleSpan = Math.min(angleStepPerDoc * 0.85, (group.length * 0.25));
+
+    group.forEach((item, itemIdx) => {
+      const dv = item.dv;
+      const cos = dv.cosineDistance ?? 0.5;
+      const euc = dv.euclideanDistance ?? 0.5;
+      const r = Math.max(0.12, Math.min(1.0, cos * 1.1));
+      
+      const angle = startAngle + (group.length > 1 ? (itemIdx / (group.length - 1)) * groupAngleSpan : (groupAngleSpan / 2));
+      const x = parseFloat((r * Math.cos(angle)).toFixed(3));
+      const y = parseFloat((r * Math.sin(angle)).toFixed(3));
+
+      docPoints.push({
+        name: dv.documentId || `${dName} #${itemIdx + 1}`,
+        baseDoc: dName,
+        chunkIndex: itemIdx,
+        color: docColor,
+        value: [x, y, cos, euc],
+        content: dv.content || ''
+      });
+    });
+
+    currentAngle += angleStepPerDoc;
+  });
+
+  // 1. Ray Lines (Center Query -> Top 5 Nearest Chunks)
+  const sortedByCos = [...docPoints].sort((a, b) => a.value[2] - b.value[2]);
+  const topNearest = sortedByCos.slice(0, Math.min(5, docPoints.length));
+  const queryRayLines = topNearest.map(dp => ({
     coords: [queryPoint, [dp.value[0], dp.value[1]]],
     lineStyle: {
-      color: dp.value[2] < 0.4 ? '#10b981' : dp.value[2] < 0.7 ? '#6366f1' : '#64748b',
-      width: Math.max(1, (1.0 - dp.value[2]) * 3),
+      color: 'rgba(56, 189, 248, 0.75)',
+      width: Math.max(1.5, (1.0 - dp.value[2]) * 3),
       type: 'dashed'
     }
   }));
 
-  const option = {
-    backgroundColor: '#060911',
+  // 2. Intra-Document Sequential Links (Chunk i -> Chunk i+1 of same PDF)
+  const intraDocLines = [];
+  uniqueDocs.forEach(dName => {
+    const pointsInDoc = docPoints.filter(p => p.baseDoc === dName);
+    const dColor = docColorMap[dName];
+    for (let i = 0; i < pointsInDoc.length - 1; i++) {
+      intraDocLines.push({
+        coords: [
+          [pointsInDoc[i].value[0], pointsInDoc[i].value[1]],
+          [pointsInDoc[i + 1].value[0], pointsInDoc[i + 1].value[1]]
+        ],
+        lineStyle: {
+          color: dColor,
+          width: 1.8,
+          opacity: 0.6
+        }
+      });
+    }
+  });
+
+  // 3. Cross-Document Semantic Affinity Bridges (High semantic similarity between different PDFs)
+  const crossDocBridges = [];
+  if (uniqueDocs.length > 1) {
+    for (let i = 0; i < docPoints.length; i++) {
+      for (let j = i + 1; j < docPoints.length; j++) {
+        if (docPoints[i].baseDoc !== docPoints[j].baseDoc) {
+          const distDiff = Math.abs(docPoints[i].value[2] - docPoints[j].value[2]);
+          // If two chunks from different docs share very close semantic proximity to query
+          if (distDiff < 0.06 && docPoints[i].value[2] < 0.5) {
+            crossDocBridges.push({
+              coords: [
+                [docPoints[i].value[0], docPoints[i].value[1]],
+                [docPoints[j].value[0], docPoints[j].value[1]]
+              ],
+              lineStyle: {
+                color: 'rgba(168, 85, 247, 0.45)',
+                width: 1.2,
+                type: 'dotted'
+              }
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const allLines = [...queryRayLines, ...intraDocLines, ...crossDocBridges];
+
+  vectorChart.setOption({
+    backgroundColor: 'transparent',
+    legend: {
+      show: uniqueDocs.length > 1,
+      top: '2%',
+      left: '3%',
+      textStyle: { color: '#94a3b8', fontSize: 10.5, fontFamily: 'Inter' },
+      data: uniqueDocs.map(d => ({ name: d, itemStyle: { color: docColorMap[d] } }))
+    },
     tooltip: {
       trigger: 'item',
-      backgroundColor: '#0c1222',
-      borderColor: '#6366f1',
+      backgroundColor: '#0f172a',
+      borderColor: '#38bdf8',
+      borderWidth: 1,
+      padding: [8, 12],
       textStyle: { color: '#f8fafc', fontFamily: 'Fira Code', fontSize: 11 },
-      formatter: function (params) {
-        if (params.seriesType === 'scatter') {
-          if (params.data.name === 'QUERY') {
-            return `<strong>🔍 CANLI SORGU (QUERY)</strong><br/>"${(query || '').slice(0, 50)}..."<br/>Merkez: [0.0, 0.0]`;
+      formatter: function (p) {
+        if (p.seriesType === 'scatter') {
+          if (p.data.name === 'QUERY') {
+            return `<div style="font-weight:700; color:#38bdf8; margin-bottom:4px;">MERKEZ SORGU (QUERY)</div>
+                    <div style="color:#cbd5e1; font-style:italic; font-size:10.5px; margin-bottom:4px;">"${escapeHtml((query || '').slice(0, 55))}..."</div>
+                    <div style="font-size:10px; color:#64748b;">Koordinat: [0.0, 0.0]</div>`;
           }
-          return `<strong>📄 ${params.data.name}</strong><br/>
-                  Cosine Mesafe (r): <span style="color:#10b981;font-weight:bold;">${params.data.value[2]}</span><br/>
-                  Euclidean (L2): <span style="color:#06b6d4;font-weight:bold;">${params.data.value[3]}</span><br/>
-                  Koordinat: [${params.data.value[0]}, ${params.data.value[1]}]<br/>
-                  <span style="color:#94a3b8; font-size:10px;">${(params.data.content || '').slice(0, 80)}...</span>`;
+          const cos = p.data.value[2];
+          const euc = p.data.value[3];
+          const docName = p.data.baseDoc || 'Belge';
+          const nodeColor = p.data.color || '#38bdf8';
+
+          return `<div style="font-weight:700; color:${nodeColor}; margin-bottom:4px;">📄 ${escapeHtml(docName)}</div>
+                  <div style="color:#ffffff; font-weight:600; font-size:11px; margin-bottom:4px;">${escapeHtml(p.data.name)}</div>
+                  <div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;">
+                    <span style="color:#94a3b8;">Cosine Mesafe:</span>
+                    <strong style="color:${cos < 0.4 ? '#10b981' : (cos < 0.7 ? '#38bdf8' : '#f43f5e')};">${cos}</strong>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:4px;">
+                    <span style="color:#94a3b8;">Euclidean (L2):</span>
+                    <strong style="color:#38bdf8;">${euc}</strong>
+                  </div>
+                  <div style="color:#64748b; font-size:10px; max-width:240px; line-height:1.3;">
+                    ${escapeHtml((p.data.content || '').slice(0, 75))}...
+                  </div>`;
         }
       }
     },
-    grid: { left: '10%', right: '10%', top: '15%', bottom: '10%' },
+    grid: { left: '8%', right: '8%', top: uniqueDocs.length > 1 ? '16%' : '10%', bottom: '10%' },
     xAxis: {
       type: 'value',
       scale: true,
-      name: 'Vektör X (Proj.)',
-      nameTextStyle: { color: '#64748b' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-      axisLine: { lineStyle: { color: '#64748b' } }
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+      axisLine: { lineStyle: { color: '#334155' } },
+      axisLabel: { color: '#64748b', fontSize: 10, fontFamily: 'Fira Code' }
     },
     yAxis: {
       type: 'value',
       scale: true,
-      name: 'Vektör Y (Proj.)',
-      nameTextStyle: { color: '#64748b' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-      axisLine: { lineStyle: { color: '#64748b' } }
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+      axisLine: { lineStyle: { color: '#334155' } },
+      axisLabel: { color: '#64748b', fontSize: 10, fontFamily: 'Fira Code' }
     },
-    dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: [0],
-        yAxisIndex: [0],
-        filterMode: 'none',
-        moveOnMouseMove: true,
-        zoomOnMouseWheel: true
-      }
-    ],
     series: [
       {
         type: 'lines',
         coordinateSystem: 'cartesian2d',
-        data: linesData,
-        effect: { show: true, period: 4, trailLength: 0.2, symbol: 'arrow', symbolSize: 6, color: '#06b6d4' }
+        data: allLines,
+        effect: {
+          show: true,
+          period: 3.5,
+          trailLength: 0.25,
+          symbol: 'arrow',
+          symbolSize: 4.5,
+          color: '#38bdf8'
+        }
       },
       {
         name: 'Query',
         type: 'scatter',
         symbol: 'diamond',
         symbolSize: 22,
-        itemStyle: { color: '#06b6d4', shadowBlur: 15, shadowColor: 'rgba(6,182,212,0.8)' },
+        itemStyle: {
+          color: '#0ea5e9',
+          shadowBlur: 16,
+          shadowColor: 'rgba(14, 165, 233, 0.8)'
+        },
         label: {
           show: true,
           formatter: 'MERKEZ SORGU',
           position: 'bottom',
           color: '#38bdf8',
-          fontFamily: 'Plus Jakarta Sans',
-          fontWeight: 'bold',
-          fontSize: 10
+          fontFamily: 'Inter',
+          fontWeight: '600',
+          fontSize: 9.5
         },
         data: [{ name: 'QUERY', value: queryPoint }]
       },
       {
         name: 'Documents',
         type: 'scatter',
-        symbolSize: function (val) { return 10 + ((1.0 - (val[2] || 0.5)) * 14); },
+        symbolSize: val => 12 + ((1.0 - (val[2] || 0.5)) * 12),
         itemStyle: {
-          color: function (params) {
-            const cosDist = params.data.value[2];
-            return cosDist < 0.4 ? '#10b981' : cosDist < 0.7 ? '#6366f1' : '#f43f5e';
-          },
-          opacity: 0.88,
+          color: p => p.data.color || '#38bdf8',
           shadowBlur: 10,
-          shadowColor: 'rgba(99,102,241,0.5)'
+          shadowColor: 'rgba(56, 189, 248, 0.4)',
+          opacity: 0.95
         },
         label: {
           show: true,
-          formatter: function (params) {
-            // Yüzlerce chunk varsa sadece en yakın olanları etiketle, ekran kalabalık olmasın
-            if (numDocs > 20) {
-              return (params.data.value[2] < 0.45) ? params.data.name : '';
-            }
-            return params.data.name;
-          },
+          formatter: p => numDocs > 15 ? (p.data.value[2] < 0.4 ? p.data.name : '') : p.data.name,
           position: 'top',
           color: '#cbd5e1',
-          fontFamily: 'Plus Jakarta Sans',
-          fontWeight: 'bold',
-          fontSize: 10
+          fontFamily: 'Inter',
+          fontWeight: '600',
+          fontSize: 9.5
         },
         data: docPoints
       }
     ]
-  };
-
-  vectorChartInstance.setOption(option);
+  });
 }
 
-// --- Visualizer Fullscreen Toggle ---
-function toggleFullscreenViz(boxId) {
-  const box = document.getElementById(boxId);
-  if (!box) return;
-
-  const btn = box.querySelector('.viz-expand-btn');
-  const isFull = box.classList.toggle('fullscreen-viz');
-
-  if (btn) {
-    btn.innerHTML = isFull ? '✕' : '⛶';
-    btn.title = isFull ? 'Küçült' : 'Tam Ekran / Büyüt';
-  }
-
-  // ESC tuşuyla tam ekrandan çıkma desteği
-  if (isFull) {
-    const escHandler = (e) => {
-      if (e.key === 'Escape') {
-        box.classList.remove('fullscreen-viz');
-        if (btn) {
-          btn.innerHTML = '⛶';
-          btn.title = 'Tam Ekran / Büyüt';
-        }
-        document.removeEventListener('keydown', escHandler);
-        resizeAllCharts();
-      }
-    };
-    document.addEventListener('keydown', escHandler);
-  }
-
-  resizeAllCharts();
-}
-
-function resizeAllCharts() {
-  setTimeout(() => {
-    if (vectorChartInstance) vectorChartInstance.resize();
-    if (triadChartInstance) triadChartInstance.resize();
-    if (hardwareChartInstance) hardwareChartInstance.resize();
-  }, 80);
-}
-
-// --- Panel 2: RAG Triad Radar ---
-function renderRagTriadChart(ragTriad) {
-  const chartDom = document.getElementById('ragTriadChart');
-  if (!triadChartInstance) {
-    triadChartInstance = echarts.init(chartDom);
-  }
+// 2. RAG Triad Radar with glowing area gradient
+function renderRagTriad(ragTriad) {
+  const dom = document.getElementById('ragTriadChart');
+  if (!dom) return;
+  if (!triadChart) triadChart = echarts.init(dom);
 
   const cr = (ragTriad.ContextRelevancy || ragTriad.contextRelevancy || 0) * 100;
   const ft = (ragTriad.Faithfulness || ragTriad.faithfulness || 0) * 100;
   const ar = (ragTriad.AnswerRelevancy || ragTriad.answerRelevancy || 0) * 100;
 
-  const option = {
-    backgroundColor: '#060911',
+  triadChart.setOption({
+    backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#0c1222',
-      borderColor: '#06b6d4',
+      backgroundColor: '#0f172a',
+      borderColor: '#38bdf8',
       textStyle: { color: '#f8fafc', fontFamily: 'Fira Code' }
     },
     radar: {
       indicator: [
-        { name: `1. Context Relevancy\n(${cr.toFixed(0)}% Arama Hassasiyeti)`, max: 100 },
-        { name: `2. Faithfulness\n(${ft.toFixed(0)}% Olgusal Sadakat)`, max: 100 },
-        { name: `3. Answer Relevancy\n(${ar.toFixed(0)}% Soru-Yanıt Uyumu)`, max: 100 }
+        { name: `Context Relevancy\n(%${cr.toFixed(0)} Arama Hassasiyeti)`, max: 100 },
+        { name: `Faithfulness\n(%${ft.toFixed(0)} Olgusal Sadakat)`, max: 100 },
+        { name: `Answer Relevancy\n(%${ar.toFixed(0)} Soru Uyumu)`, max: 100 }
       ],
       shape: 'polygon',
       splitNumber: 4,
-      axisName: { color: '#cbd5e1', fontFamily: 'Plus Jakarta Sans', fontWeight: 'bold', fontSize: 11 },
-      splitLine: { lineStyle: { color: 'rgba(99, 102, 241, 0.2)' } },
-      splitArea: { show: true, areaStyle: { color: ['rgba(6, 182, 212, 0.05)', 'rgba(99, 102, 241, 0.05)'] } },
-      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } }
+      axisName: { color: '#cbd5e1', fontSize: 10.5, fontWeight: '600', fontFamily: 'Inter' },
+      splitLine: { lineStyle: { color: 'rgba(56, 189, 248, 0.15)' } },
+      splitArea: {
+        show: true,
+        areaStyle: {
+          color: ['rgba(14, 165, 233, 0.03)', 'rgba(99, 102, 241, 0.05)', 'rgba(14, 165, 233, 0.07)', 'rgba(99, 102, 241, 0.1)']
+        }
+      },
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.08)' } }
     },
     series: [{
-      name: 'RAG Triad Skoru',
       type: 'radar',
       data: [{
         value: [cr, ft, ar],
         name: 'RAG Triad Tri-Metric',
-        areaStyle: { color: 'rgba(6, 182, 212, 0.4)' },
-        lineStyle: { color: '#06b6d4', width: 2 },
-        itemStyle: { color: '#38bdf8' }
+        areaStyle: {
+          color: new echarts.graphic.RadialGradient(0.5, 0.5, 1, [
+            { offset: 0, color: 'rgba(56, 189, 248, 0.5)' },
+            { offset: 1, color: 'rgba(99, 102, 241, 0.25)' }
+          ])
+        },
+        lineStyle: { color: '#38bdf8', width: 2.5, shadowBlur: 8, shadowColor: 'rgba(56, 189, 248, 0.6)' },
+        itemStyle: { color: '#ffffff', borderColor: '#38bdf8', borderWidth: 2 }
       }]
     }]
-  };
-
-  triadChartInstance.setOption(option);
+  });
 }
 
-// --- Panel 3: Hardware Profiling & Ranking ---
-function renderHardwareAndRankingChart(hw, ranking) {
-  const chartDom = document.getElementById('hardwareProfilingChart');
-  if (!hardwareChartInstance) {
-    hardwareChartInstance = echarts.init(chartDom);
-  }
+// 3. Hardware Latency Bar Chart with multi-color components
+function renderHardwareMetrics(hw, ranking) {
+  const dom = document.getElementById('hardwareProfilingChart');
+  if (!dom) return;
+  if (!hardwareChart) hardwareChart = echarts.init(dom);
 
-  const option = {
-    backgroundColor: '#060911',
+  const colors = [
+    new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#3b82f6' }, { offset: 1, color: '#60a5fa' }]),
+    new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#d97706' }, { offset: 1, color: '#fbbf24' }]),
+    new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#7c3aed' }, { offset: 1, color: '#a78bfa' }]),
+    new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#059669' }, { offset: 1, color: '#34d399' }]),
+    new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#0284c7' }, { offset: 1, color: '#38bdf8' }])
+  ];
+
+  const totalMs = hw.totalLatencyMs || hw.TotalLatencyMs || 0;
+  const gpuMs = hw.gpuRerankMs || hw.GpuRerankMs || 0;
+  const top1Score = (ranking && (ranking.top1Score ?? ranking.Top1Score)) ?? (ranking && (ranking.ndcgAtK ?? ranking.NdcgAtK)) ?? 0.88;
+
+  hardwareChart.setOption({
+    backgroundColor: 'transparent',
     title: {
-      text: `Top. Gecikme: ${hw.totalLatencyMs || hw.TotalLatencyMs} ms | GPU: ${hw.gpuRerankMs || hw.GpuRerankMs} ms | NDCG@3: ${ranking.ndcgAtK || ranking.NdcgAtK}`,
-      textStyle: { color: '#f59e0b', fontSize: 11, fontFamily: 'Fira Code' },
+      text: `Toplam: ${totalMs} ms  |  GPU: ${gpuMs} ms  |  Top-1 Skor: ${typeof top1Score === 'number' ? top1Score.toFixed(2) : top1Score}`,
+      textStyle: { color: '#fbbf24', fontSize: 10.5, fontFamily: 'Fira Code', fontWeight: '600' },
       right: '3%',
       top: '4%'
     },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      backgroundColor: '#0c1222',
-      borderColor: '#f59e0b',
+      backgroundColor: '#0f172a',
+      borderColor: '#fbbf24',
       textStyle: { color: '#f8fafc', fontFamily: 'Fira Code' }
     },
-    grid: { left: '15%', right: '8%', bottom: '12%', top: '20%', containLabel: true },
+    grid: { left: '20%', right: '8%', bottom: '10%', top: '18%', containLabel: true },
     xAxis: {
       type: 'value',
-      name: 'Milisaniye (ms)',
+      name: 'ms',
       nameTextStyle: { color: '#64748b' },
-      axisLabel: { color: '#94a3b8', fontFamily: 'Fira Code' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
+      axisLabel: { color: '#94a3b8', fontSize: 10, fontFamily: 'Fira Code' },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } }
     },
     yAxis: {
       type: 'category',
-      // GPU adı API'den dinamik geliyor (hw.gpuDevice)
-      data: ['Chunk & Ingest', 'BM25 Sparse', 'SIMD Dense', hw.gpuDevice || 'GPU Re-Rank', 'Triad Değlendirme'],
-      axisLabel: { color: '#f8fafc', fontFamily: 'Plus Jakarta Sans', fontWeight: '600' }
+      data: ['Chunk / Ingest', 'BM25 Sparse', 'SIMD Dense', hw.gpuDevice || 'GPU Re-Rank', 'Triad Değerlendirme'],
+      axisLabel: { color: '#f1f5f9', fontSize: 10.5, fontWeight: '500' }
     },
-    series: [
-      {
-        name: 'Gecikme (ms)',
-        type: 'bar',
-        itemStyle: {
-          color: function (params) {
-            const colors = ['#6366f1', '#f59e0b', '#a855f7', '#10b981', '#06b6d4'];
-            return colors[params.dataIndex];
-          },
-          borderRadius: [0, 4, 4, 0]
-        },
-        label: {
-          show: true,
-          position: 'right',
-          formatter: '{c} ms',
-          color: '#cbd5e1',
-          fontFamily: 'Fira Code'
-        },
-        data: [
-          hw.ingestMs || hw.IngestMs || 0.1,
-          hw.bm25SearchMs || hw.Bm25SearchMs || 0.1,
-          hw.simdDenseSearchMs || hw.SimdDenseSearchMs || 0.1,
-          hw.gpuRerankMs || hw.GpuRerankMs || 0.1,
-          hw.triadEvalMs || hw.TriadEvalMs || 0.1
-        ]
-      }
-    ]
-  };
-
-  hardwareChartInstance.setOption(option);
+    series: [{
+      type: 'bar',
+      itemStyle: {
+        color: p => colors[p.dataIndex],
+        borderRadius: [0, 4, 4, 0]
+      },
+      label: {
+        show: true,
+        position: 'right',
+        formatter: '{c} ms',
+        color: '#e2e8f0',
+        fontFamily: 'Fira Code',
+        fontSize: 10,
+        fontWeight: '600'
+      },
+      data: [
+        hw.ingestMs || hw.IngestMs || 0.1,
+        hw.bm25Ms || hw.Bm25Ms || 0.1,
+        hw.simdDenseMs || hw.SimdDenseMs || 0.1,
+        hw.gpuRerankMs || hw.GpuRerankMs || 0.5,
+        hw.evaluatorMs || hw.EvaluatorMs || 0.1
+      ]
+    }]
+  });
 }
 
-// --- Panel 4: Sentence-by-Sentence Grounding Proof Explorer ---
-function renderGroundingProofExplorer(sentenceDetails, overallFaithfulness) {
+// 4. Grounding Proof Explorer DOM renderer
+function renderGroundingExplorer(sentenceDetails, overallFaithfulness) {
   const container = document.getElementById('groundingProofExplorer');
+  if (!container) return;
+
   if (!sentenceDetails || sentenceDetails.length === 0) {
-    container.innerHTML = `<div style="text-align:center; color:#64748b; padding:2rem;">Aday yanıt girildiğinde cümle bazlı kanıtlar burada listelenir.</div>`;
+    container.innerHTML = `<div class="proof-empty">Doğrulanacak cümle bulunamadı.</div>`;
     return;
   }
 
   let html = '';
-  sentenceDetails.forEach(s => {
-    const isGrounded = s.isGrounded !== undefined ? s.isGrounded : s.IsGrounded;
-    const sentence = s.sentence || s.Sentence;
-    const support = s.supportRatio || s.SupportRatio;
-    const docId = s.bestMatchingDocId || s.BestMatchingDocId;
-    const snippet = s.bestMatchingSnippet || s.BestMatchingSnippet;
-    const idx = s.sentenceIndex || s.SentenceIndex;
+  sentenceDetails.forEach((s, idx) => {
+    const isGrounded = s.isGrounded || s.IsGrounded;
+    const ratio = Math.round((s.supportRatio || s.SupportRatio || 0) * 100);
+    const sent = s.sentence || s.Sentence;
+    const doc = s.bestMatchingDoc || s.BestMatchingDoc || 'Klinik Havuz';
+    const snippet = s.sourceSnippet || s.SourceSnippet || '';
+
+    const badgeClass = isGrounded ? 'tag-green' : 'tag-red';
+    const badgeText = isGrounded ? `%${ratio} Doğrulandı` : `%${ratio} Desteksiz`;
 
     html += `
       <div class="proof-card ${isGrounded ? 'grounded' : 'ungrounded'}">
-        <div class="proof-header">
-          <span class="proof-title">Cümle ${idx}</span>
-          <span class="proof-tag ${isGrounded ? 'green' : 'red'}">${isGrounded ? '✅ DOĞRULANDI' : '⚠️ HALÜSİNASYON'}</span>
+        <div class="proof-card-top">
+          <span class="proof-status-tag ${badgeClass}">${badgeText}</span>
+          <span class="proof-doc-tag">${escapeHtml(doc)}</span>
         </div>
-        <div class="proof-body">"${sentence}"</div>
-        <div class="proof-meta">
-          <span>Kanıt Desteği: <strong>${(support * 100).toFixed(0)}%</strong></span>
-          ${docId ? `<span>Kaynak: <span class="source-tag">${docId}</span> (${snippet})</span>` : `<span>Kaynak: <span style="color:#f43f5e;">Eşleşen Doküman Yok</span></span>`}
-        </div>
+        <div class="proof-sent-txt">"${escapeHtml(sent)}"</div>
+        ${snippet ? `<div class="proof-snippet-txt">Kaynak Eşleşmesi: <span>"${escapeHtml(snippet)}"</span></div>` : ''}
       </div>
     `;
   });
@@ -495,10 +672,22 @@ function renderGroundingProofExplorer(sentenceDetails, overallFaithfulness) {
   container.innerHTML = html;
 }
 
-// ==========================================
-// 💬 CLINICAL CHAT & RAG INSPECTOR ENGINE
-// ==========================================
+function toggleFullscreenViz(boxId) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  box.classList.toggle('fullscreen-viz');
+  resizeAllCharts();
+}
 
+function resizeAllCharts() {
+  if (vectorChart) vectorChart.resize();
+  if (triadChart) triadChart.resize();
+  if (hardwareChart) hardwareChart.resize();
+}
+
+// ==========================================================================
+// 6. CLINICAL CHAT CONTROLLER
+// ==========================================================================
 function handleChatKeyDown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -515,6 +704,7 @@ function sendQuickPrompt(type) {
   } else if (type === 'hallucination_test') {
     input.value = "Penisilin alerjisinde hastaya günde 2000mg Amoksisilin verilmesi güvenli midir?";
   }
+  autoResizeTextarea(input);
   sendChatMessage();
 }
 
@@ -525,127 +715,124 @@ async function sendChatMessage() {
 
   const stream = document.getElementById('chatMessagesStream');
 
-  // 1. Append User Message
+  // 1. User Message Bubble
   const userHtml = `
-    <div class="chat-msg user-msg">
-      <div class="msg-avatar">🧑‍⚕️</div>
-      <div class="msg-bubble">
-        <div class="msg-meta">Doktor / Klinik Kullanıcı</div>
-        <div class="msg-content">${query}</div>
-      </div>
+    <div class="msg-card msg-user">
+      <div class="msg-header">Kullanıcı / Doktor</div>
+      <div class="msg-body">${escapeHtml(query)}</div>
     </div>
   `;
   stream.insertAdjacentHTML('beforeend', userHtml);
   input.value = '';
+  autoResizeTextarea(input);
   stream.scrollTop = stream.scrollHeight;
 
-  // 2. Append AI Pending Message
+  // 2. Pending AI Bubble
   const pendingId = `ai_msg_${Date.now()}`;
-  const aiPendingHtml = `
-    <div id="${pendingId}" class="chat-msg ai-msg">
-      <div class="msg-avatar">🤖</div>
-      <div class="msg-bubble">
-        <div class="msg-meta">Klinik AI Asistanı • RAG & Guardrail Çalışıyor...</div>
-        <div class="msg-content" style="color:#06b6d4;">⏳ Klinik dokümanlar taranıyor, GPU re-ranking ve dozaj kilidi denetleniyor...</div>
+  const pendingHtml = `
+    <div id="${pendingId}" class="msg-card msg-assistant">
+      <div class="msg-header">
+        <span class="msg-sender">Klinik Asistan</span>
+        <span class="msg-tag">İşleniyor...</span>
+      </div>
+      <div class="msg-body" style="color: var(--text-muted);">
+        Dokümanlar taranıyor, GPU re-ranking ve olgusal grounding denetleniyor...
       </div>
     </div>
   `;
-  stream.insertAdjacentHTML('beforeend', aiPendingHtml);
+  stream.insertAdjacentHTML('beforeend', pendingHtml);
   stream.scrollTop = stream.scrollHeight;
 
+  // 3. API Call
   try {
     const corpusInput = document.getElementById('corpusInput');
-    const corpusVal = corpusInput ? corpusInput.value.trim() : '';
-    const docName = window.currentUploadedDocName || (corpusVal ? "Yuklenen_Dokuman.pdf" : "Klinik_Korpus.pdf");
+    const corpusVal = corpusInput ? corpusInput.value.trim() : (state.uploadedCorpus || '');
+    const docName = state.uploadedDocName || (corpusVal ? "Yuklenen_Dokuman.pdf" : "Klinik_Korpus.pdf");
 
-    const res = await fetch(`${API_BASE}/api/chat/rag`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        query: query,
-        corpus: corpusVal,
-        documentName: docName
-      })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      currentMessageTelemetry = data;
-      renderAiResponseWithInlineTracing(pendingId, data);
-      updateRagInspector(data);
-    }
+    const data = await api.sendChat(query, corpusVal, docName);
+    state.currentTelemetry = data;
+    renderAiResponse(pendingId, data);
+    updateRagInspector(data);
   } catch (err) {
-    const aiBubble = document.getElementById(pendingId);
-    if (aiBubble) {
-      aiBubble.querySelector('.msg-content').innerHTML = `<span style="color:#f43f5e;">Bağlantı hatası: C# API'ye ulaşılamadı.</span>`;
+    const elem = document.getElementById(pendingId);
+    if (elem) {
+      elem.querySelector('.msg-tag').className = 'msg-tag blocked';
+      elem.querySelector('.msg-tag').textContent = 'Hata';
+      elem.querySelector('.msg-body').innerHTML = `<span style="color: var(--danger);">API Yanıtı Alınamadı: ${escapeHtml(err.message)}</span>`;
     }
   }
 }
 
-function renderAiResponseWithInlineTracing(msgElemId, data) {
-  const elem = document.getElementById(msgElemId);
+function renderAiResponse(elemId, data) {
+  const elem = document.getElementById(elemId);
   if (!elem) return;
 
-  window.currentSentences = data.sentences || [];
+  state.currentSentences = data.sentences || [];
 
-  const bubble = elem.querySelector('.msg-bubble');
-  const guardrailStatus = (data.telemetry && data.telemetry.guardrailStatus) || '';
-  const isBlocked = guardrailStatus.includes('BLOCKED');
+  const tagElem = elem.querySelector('.msg-tag');
+  const bodyElem = elem.querySelector('.msg-body');
 
-  let formattedSentencesHtml = '';
-  let hasRealUngroundedFact = false;
+  let hasUngrounded = false;
+  let formattedHtml = '';
 
   (data.sentences || []).forEach((s, idx) => {
     const isGrounded = s.isGrounded || false;
-    const doc = (s.bestDoc || 'Bilinmiyor');
+    const doc = s.bestDoc || 'Bilinmiyor';
     const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
-    const ratio = Math.round((s.supportRatio || 0) * 100);
 
     if (!isGrounded && !isMeta) {
-      hasRealUngroundedFact = true;
+      hasUngrounded = true;
     }
 
-    let badgeText = isMeta ? '💬 Sohbet' : (isGrounded ? '✅ ' + ratio + '%' : '⚠️ Uydurma');
-    let cssClass = isMeta ? 'conversational' : (isGrounded ? 'grounded' : 'ungrounded');
+    const cssClass = isMeta ? 'conversational' : (isGrounded ? 'grounded' : 'ungrounded');
+    const ratio = Math.round((s.supportRatio || 0) * 100);
+    const titleText = isMeta ? 'Sohbet Yanıtı' : (isGrounded ? `Olgusal Kanıt: %${ratio} Doğrulandı` : `Desteksiz İddia: %${ratio}`);
 
-    formattedSentencesHtml += `
-      <span class="traced-sentence ${cssClass}"
+    const sentenceText = s.sentence || '';
+    // Check if sentence starts with a numbered list item like "1. ", "2. ", or bullet
+    const isListItem = /^[0-9]+[\.\)]\s+|^[-*•]\s+/.test(sentenceText.trim());
+
+    if (isListItem && idx > 0) {
+      formattedHtml += '<div class="chat-list-spacer"></div>';
+    }
+
+    formattedHtml += `
+      <span class="sentence-span ${cssClass}" 
             data-idx="${idx}"
-            onmouseenter="onSentenceHoverByIndex(${idx})"
-            onclick="onSentenceClickByIndex(${idx})"
-            title="Tıkla: Kaynak PDF'te bu satırı incele">
-        ${escapeHtml(s.sentence || '')}
-        <small style="font-size:0.65rem; font-weight:bold; opacity:0.85;">[${badgeText}]</small>
-      </span> 
-    `;
+            title="${titleText} (Detaylar için tıklayın)"
+            onmouseenter="onSentenceHover(${idx})"
+            onclick="onSentenceClick(${idx})">${escapeHtml(sentenceText)}</span> `;
   });
 
-  const statusBadge = hasRealUngroundedFact
-    ? '<span style="color:#f43f5e;">⚠️ GÜVENLİK KİLİDİ DEVREDE</span>'
-    : '<span style="color:#10b981;">✅ KANITLANDI / DOĞRULANDI</span>';
+  if (hasUngrounded) {
+    tagElem.className = 'msg-tag blocked';
+    tagElem.textContent = 'Güvenlik Uyarısı';
+  } else {
+    tagElem.className = 'msg-tag';
+    tagElem.textContent = 'Olgusal Olarak Doğrulandı';
+  }
 
-  bubble.innerHTML = `
-    <div class="msg-meta">
-      Klinik AI Asistanı • ${statusBadge}
-    </div>
-    <div class="msg-content">
-      ${formattedSentencesHtml || (data.answer || 'Yanıt alınamadı.')}
-    </div>
-  `;
+  bodyElem.innerHTML = formattedHtml || escapeHtml(data.answer || 'Yanıt alınamadı.');
 }
 
-function onSentenceHoverByIndex(idx) {
-  if (!window.currentSentences || !window.currentSentences[idx]) return;
-  const s = window.currentSentences[idx];
-  const doc = s.bestDoc || 'Bilinmiyor';
+function onSentenceHover(idx) {
+  if (!state.currentSentences || !state.currentSentences[idx]) return;
+
+  document.querySelectorAll('.sentence-span').forEach(el => el.classList.remove('active'));
+  const activeEl = document.querySelector(`.sentence-span[data-idx="${idx}"]`);
+  if (activeEl) activeEl.classList.add('active');
+
+  const s = state.currentSentences[idx];
+  const doc = s.bestDoc || 'Doküman';
   const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
   const ratio = Math.round((s.supportRatio || 0) * 100);
-  highlightSentenceProof(s.sentence || '', doc, s.snippet || '', s.isGrounded || false, ratio, isMeta);
+
+  updateSentenceProofBox(s.sentence || '', doc, s.snippet || '', s.isGrounded || false, ratio, isMeta);
 }
 
-function onSentenceClickByIndex(idx) {
-  onSentenceHoverByIndex(idx);
-  const s = window.currentSentences ? window.currentSentences[idx] : null;
+function onSentenceClick(idx) {
+  onSentenceHover(idx);
+  const s = state.currentSentences ? state.currentSentences[idx] : null;
   const doc = (s && s.bestDoc) || '';
   const isMeta = doc.includes('Diyalog') || doc.includes('Meta');
   if (!isMeta) {
@@ -653,125 +840,169 @@ function onSentenceClickByIndex(idx) {
   }
 }
 
+// ==========================================================================
+// 7. RAG INSPECTOR CONTROLLER
+// ==========================================================================
 function updateRagInspector(data) {
-  // Guard: telemetry yoksa işlem yapma
   if (!data || !data.telemetry) return;
   const t = data.telemetry;
 
   document.getElementById('activeMessageBadge').textContent = data.messageId || 'msg_live';
 
-  // Güvenli sayı formatlaması - undefined/null crash önlenir
-  const fmt2 = v => (typeof v === 'number' ? v.toFixed(2) : '---');
-  const fmt1 = v => (typeof v === 'number' ? v.toFixed(1) : '---');
-  const fmt0 = v => (typeof v === 'number' ? v.toFixed(0) : '---');
-
   // Metrics
-  document.getElementById('inspConfidence').textContent = fmt2(t.retrievalConfidence);
-  document.getElementById('inspRerankLift').textContent = `+${fmt1(t.rerankLiftPercent)}%`;
-  document.getElementById('inspContextRel').textContent = `${fmt0(t.contextRelevancyPercent)}%`;
-  document.getElementById('inspFaithfulness').textContent = `${fmt0(t.faithfulnessPercent)}%`;
+  document.getElementById('inspConfidence').textContent = formatNumber(t.retrievalConfidence, 2);
+  document.getElementById('inspRerankLift').textContent = `+${formatNumber(t.rerankLiftPercent, 1)}%`;
+  document.getElementById('inspContextRel').textContent = `${formatNumber(t.contextRelevancyPercent, 0)}%`;
+  document.getElementById('inspFaithfulness').textContent = `${formatNumber(t.faithfulnessPercent, 0)}%`;
 
-  // Dosage Lock
+  // Dosage Lock Banner
   const dosageBox = document.getElementById('dosageLockBox');
   const dosageTitle = document.getElementById('dosageLockTitle');
   const dosageDesc = document.getElementById('dosageLockDesc');
-  const dosageIcon = document.getElementById('dosageLockIcon');
-
   const dg = t.dosageGuard || {};
+
   if (dg.isValid !== false) {
-    dosageBox.className = "dosage-lock-box";
-    dosageIcon.textContent = "🛡️";
-    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ✅ DOĞRULANDI";
-    dosageTitle.style.color = "#10b981";
-    dosageDesc.textContent = dg.status || '';
+    dosageBox.className = "guard-banner";
+    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: Doğrulandı";
+    dosageDesc.textContent = dg.status || "Klinik dozaj ve kısıtlamalar güvenli aralıkta.";
   } else {
-    dosageBox.className = "dosage-lock-box violation";
-    dosageIcon.textContent = "🚨";
-    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: ⚠️ İHLAL (ENGEL)";
-    dosageTitle.style.color = "#f43f5e";
-    dosageDesc.textContent = dg.status || '';
+    dosageBox.className = "guard-banner violation";
+    dosageTitle.textContent = "Dozaj & Etken Madde Kilidi: İhlal / Engel";
+    dosageDesc.textContent = dg.status || "Belirtilen doz belgedeki yasal sınırı aşıyor.";
   }
 
-  // Hardware Profiling - null guard eklendi
+  // Hardware Latency
   const lms = t.latencyMs || {};
   document.getElementById('inspTotalTime').textContent = `${lms.total ?? '---'} ms`;
-  document.getElementById('inspBm25Ms').textContent = `${lms.bm25 ?? '---'} ms`;
-  document.getElementById('inspSimdMs').textContent = `${lms.simdVector ?? '---'} ms`;
-  document.getElementById('inspGpuMs').textContent = `${lms.gpuRerank ?? '---'} ms`;
+  document.getElementById('inspBm25Ms').textContent = `${lms.bm25 ?? 0} ms`;
+  document.getElementById('inspSimdMs').textContent = `${lms.simdVector ?? 0} ms`;
+  document.getElementById('inspGpuMs').textContent = `${lms.gpuRerank ?? 0} ms`;
 
-  // Decision & Execution Trace Pipeline Steps
+  const total = lms.total || 100;
+  document.getElementById('barSimd').style.width = Math.min(100, ((lms.simdVector || 1) / total) * 300) + '%';
+  document.getElementById('barBm25').style.width = Math.min(100, ((lms.bm25 || 1) / total) * 300) + '%';
+  document.getElementById('barGpu').style.width = Math.min(100, ((lms.gpuRerank || 1) / total) * 300) + '%';
+
+  // Trace Steps
   const stepsContainer = document.getElementById('decisionPipelineSteps');
   if (stepsContainer) {
     const totalSentences = (data.sentences || []).length;
     const groundedCount = (data.sentences || []).filter(s => s.isGrounded || (s.bestDoc && (s.bestDoc.includes('Diyalog') || s.bestDoc.includes('Meta')))).length;
     const ungroundedCount = totalSentences - groundedCount;
-    const topDoc = (t.retrievedChunks && t.retrievedChunks[0]) ? t.retrievedChunks[0].doc : 'Klinik Havuz';
+    const topDoc = (t.retrievedChunks && t.retrievedChunks[0]) ? t.retrievedChunks[0].doc : 'Doküman';
     const topScore = (t.retrievedChunks && t.retrievedChunks[0]) ? (t.retrievedChunks[0].score || 0).toFixed(2) : '0.00';
     const dgValid = (t.dosageGuard && t.dosageGuard.isValid !== false);
 
     stepsContainer.innerHTML = `
-      <div class="step-item">
-        <span class="step-num">1</span>
-        <div class="step-txt">
-          <strong>Soru Vektörizasyonu & SIMD Embedding</strong> (${lms.simdVector ?? 0} ms)
-        </div>
-        <span class="step-badge green">CPU AVX2</span>
+      <div class="trace-step">
+        <span class="step-index">1</span>
+        <span class="step-title">Vektörizasyon &amp; SIMD Embedding (${lms.simdVector ?? 0} ms)</span>
+        <span class="step-tag green">CPU AVX2</span>
       </div>
-      <div class="step-item">
-        <span class="step-num">2</span>
-        <div class="step-txt">
-          <strong>Hibrit Arama</strong> (BM25: ${lms.bm25 ?? 0} ms) + RRF Sıralama
-        </div>
-        <span class="step-badge cyan">K=60 Fusion</span>
+      <div class="trace-step">
+        <span class="step-index">2</span>
+        <span class="step-title">Hibrit Arama (BM25: ${lms.bm25 ?? 0} ms) + RRF</span>
+        <span class="step-tag green">K=60 Fusion</span>
       </div>
-      <div class="step-item">
-        <span class="step-num">3</span>
-        <div class="step-txt">
-          <strong>RTX 4060 Ti GPU Re-Ranking</strong> ➔ En İyi: <em>${topDoc}</em> (Skor: ${topScore})
-        </div>
-        <span class="step-badge yellow">${lms.gpuRerank ?? 0} ms GPU</span>
+      <div class="trace-step">
+        <span class="step-index">3</span>
+        <span class="step-title">RTX 4060 Ti Cross-Encoder ➔ <em>${escapeHtml(topDoc)}</em> (${topScore})</span>
+        <span class="step-tag yellow">${lms.gpuRerank ?? 0} ms GPU</span>
       </div>
-      <div class="step-item">
-        <span class="step-num">4</span>
-        <div class="step-txt">
-          <strong>Ollama ${t.llmModel || 'qwen2.5:7b'}</strong> Klinik Üretim (${totalSentences} Cümle)
-        </div>
-        <span class="step-badge purple">${lms.llmGenerate ?? 0} ms</span>
+      <div class="trace-step">
+        <span class="step-index">4</span>
+        <span class="step-title">Ollama ${escapeHtml(t.llmModel || 'qwen2.5:7b')} Klinik Üretim (${totalSentences} Cümle)</span>
+        <span class="step-tag">${lms.llmGenerate ?? 0} ms</span>
       </div>
-      <div class="step-item">
-        <span class="step-num">5</span>
-        <div class="step-txt">
-          <strong>Olgusal Grounding</strong> (${groundedCount}/${totalSentences} Doğrulandı) & Dozaj Kilidi
-        </div>
-        <span class="step-badge ${dgValid && ungroundedCount === 0 ? 'green' : 'red'}">${dgValid && ungroundedCount === 0 ? 'ONAYLANDI' : 'UYARI / KİLİT'}</span>
+      <div class="trace-step">
+        <span class="step-index">5</span>
+        <span class="step-title">Olgusal Grounding (${groundedCount}/${totalSentences} Doğrulandı)</span>
+        <span class="step-tag ${dgValid && ungroundedCount === 0 ? 'green' : 'red'}">${dgValid && ungroundedCount === 0 ? 'Onaylandı' : 'Uyarı'}</span>
       </div>
     `;
   }
 
-  // Raw JSON
+  // Raw JSON Payload
   document.getElementById('rawTelemetryJson').textContent = JSON.stringify(data, null, 2);
 
-  // Default first sentence proof
   if (data.sentences && data.sentences.length > 0) {
-    const s0 = data.sentences[0];
-    const doc0 = s0.bestDoc || 'Bilinmiyor';
-    const isMeta0 = doc0.includes('Diyalog') || doc0.includes('Meta');
-    highlightSentenceProof(
-      s0.sentence || '',
-      doc0,
-      s0.snippet || '',
-      s0.isGrounded || false,
-      Math.round((s0.supportRatio || 0) * 100),
-      isMeta0
-    );
+    onSentenceHover(0);
   }
+}
+
+function updateSentenceProofBox(sentence, doc, snippet, isGrounded, ratio, isMeta = false) {
+  const container = document.getElementById('activeSentenceProofContent');
+  const lineIndicator = document.getElementById('activeLineIndicator');
+  const openDocBtn = document.getElementById('openDocViewerBtn');
+
+  const corpusInput = document.getElementById('corpusInput');
+  let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (state.uploadedCorpus || '');
+
+  let matchedLineIndex = -1;
+  if (fullCorpus && !isMeta) {
+    matchedLineIndex = findMatchingLineInCorpus(snippet, sentence, fullCorpus);
+  }
+
+  state.activeTargetLineNumber = matchedLineIndex >= 0 ? (matchedLineIndex + 1) : null;
+  state.activeTargetDoc = doc;
+  state.activeTargetSnippet = snippet;
+  state.activeTargetSentence = sentence;
+
+  if (matchedLineIndex >= 0 && !isMeta) {
+    lineIndicator.textContent = `Satır #${matchedLineIndex + 1}`;
+    lineIndicator.style.display = 'inline-block';
+    openDocBtn.style.display = 'inline-flex';
+  } else if (isMeta) {
+    lineIndicator.textContent = `Diyalog`;
+    lineIndicator.style.display = 'inline-block';
+    openDocBtn.style.display = 'none';
+  } else {
+    lineIndicator.style.display = 'none';
+    openDocBtn.style.display = 'none';
+  }
+
+  let badgeClass = isMeta ? 'blue' : (isGrounded ? 'green' : 'red');
+  let badgeTitle = isMeta ? 'Genel Klinik Diyalog / Selamlama' : (isGrounded ? 'Olgusal Kanıt Doğrulandı' : 'Desteksiz İddia / Halüsinasyon');
+  let badgePct = isMeta ? 'Diyalog' : `%${ratio} Destek`;
+
+  let lineBadgeHtml = (matchedLineIndex >= 0 && !isMeta)
+    ? `<div class="proof-chip line">Satır #${matchedLineIndex + 1}</div>`
+    : '';
+
+  container.innerHTML = `
+    <div class="proof-card-layout">
+      <div class="proof-badge-banner ${badgeClass}">
+        <span class="proof-badge-text">${badgeTitle}</span>
+        <span class="proof-badge-pct">${badgePct}</span>
+      </div>
+      
+      <div class="proof-block">
+        <div class="proof-block-label">Yanıttaki İddia:</div>
+        <div class="proof-claim-text">"${escapeHtml(sentence)}"</div>
+      </div>
+
+      <div class="proof-citation-row">
+        <div class="proof-chip doc">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>${escapeHtml(doc)}</span>
+        </div>
+        ${lineBadgeHtml}
+      </div>
+
+      ${snippet ? `
+        <div class="proof-block snippet-block">
+          <div class="proof-block-label">PDF / Korpus Eşleşen Paragraf:</div>
+          <div class="proof-source-text">"${escapeHtml(snippet)}"</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
 }
 
 function findMatchingLineInCorpus(snippet, sentence, fullCorpus) {
   if (!fullCorpus) return -1;
   const lines = fullCorpus.split('\n');
-  
-  // 1. Try snippet direct search
+
   if (snippet) {
     const cleanSnippet = snippet.replace(/^[0-9]\.\s*/, '').trim().toLowerCase();
     if (cleanSnippet.length > 6) {
@@ -781,10 +1012,9 @@ function findMatchingLineInCorpus(snippet, sentence, fullCorpus) {
     }
   }
 
-  // 2. Try sentence keywords match
   const cleanSentence = (sentence || '').toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"'0-9]/g, ' ');
-  const words = cleanSentence.split(/\s+/).filter(w => w.length >= 4 && !['icin', 'veya', 'olan', 'gibi', 'kadar', 'daha', 'olarak', 'hangi', 'tedavisinde', 'kullanilir'].includes(w));
-  
+  const words = cleanSentence.split(/\s+/).filter(w => w.length >= 4);
+
   if (words.length > 0) {
     let bestScore = 0;
     let bestIdx = -1;
@@ -806,374 +1036,388 @@ function findMatchingLineInCorpus(snippet, sentence, fullCorpus) {
   return -1;
 }
 
-function highlightSentenceProof(sentence, doc, snippet, isGrounded, ratio, isMeta = false) {
-  const container = document.getElementById('activeSentenceProofContent');
-  container.className = "proof-content-box highlight-active";
-
-  const corpusInput = document.getElementById('corpusInput');
-  let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (window.currentUploadedCorpus || '');
-  
-  let matchedLineIndex = -1;
-  if (fullCorpus && !isMeta) {
-    matchedLineIndex = findMatchingLineInCorpus(snippet, sentence, fullCorpus);
-  }
-
-  window.activeTargetLineNumber = matchedLineIndex >= 0 ? (matchedLineIndex + 1) : null;
-  window.activeTargetDoc = doc;
-  window.activeTargetSnippet = snippet;
-  window.activeTargetSentence = sentence;
-
-  const lineIndicator = document.getElementById('activeLineIndicator');
-  const openDocBtn = document.getElementById('openDocViewerBtn');
-
-  if (matchedLineIndex >= 0 && !isMeta) {
-    if (lineIndicator) lineIndicator.textContent = `📍 Satır #${matchedLineIndex + 1}`;
-    if (openDocBtn) {
-      openDocBtn.style.display = 'flex';
-      openDocBtn.innerHTML = `📖 PDF'te Satır #${matchedLineIndex + 1}'e Git & İncele`;
-    }
-  } else if (isMeta) {
-    if (lineIndicator) lineIndicator.textContent = `💬 Diyalog`;
-    if (openDocBtn) openDocBtn.style.display = 'none';
-  } else {
-    if (lineIndicator) lineIndicator.textContent = ``;
-    if (openDocBtn) openDocBtn.style.display = 'none';
-  }
-
-  let headerColor = isMeta ? '#38bdf8' : (isGrounded ? '#10b981' : '#f43f5e');
-  let headerText = isMeta 
-    ? '💬 Klinik Diyalog / Nezaket Yanıtı' 
-    : (isGrounded ? `✅ Olgusal Desteklenen Cümle (${ratio}% Örtüşme)` : `⚠️ Kaynaksız / Halüsinasyon Cümlesi (${ratio}% Örtüşme)`);
-
-  let lineBadgeHtml = (matchedLineIndex >= 0 && !isMeta) 
-    ? `<span style="background:rgba(245,158,11,0.2); color:#f59e0b; padding:0.1rem 0.4rem; border-radius:4px; font-family:var(--font-mono); font-size:0.65rem; margin-left:0.4rem;">Satır #${matchedLineIndex + 1}</span>` 
-    : '';
-
-  container.innerHTML = `
-    <div style="margin-bottom:0.4rem; color:${headerColor}; font-weight:bold; display:flex; align-items:center;">
-      <span>${headerText}</span>
-      ${lineBadgeHtml}
-    </div>
-    <div style="font-style:italic; margin-bottom:0.6rem; color:#f8fafc; cursor:pointer;" onclick="openSourceDocViewer()" title="Tıkla: Doküman modalını aç">"${sentence}"</div>
-    <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:0.4rem; font-size:0.7rem;">
-      <span style="color:#64748b;">Eşleşen Kaynak PDF:</span> <strong style="color:#06b6d4;">${doc}</strong><br/>
-      <span style="color:#64748b;">Doküman Paragrafı:</span> <span style="color:#cbd5e1;">"${snippet}"</span>
-    </div>
-  `;
-}
-
-// --- Source Document Line Viewer Modal ---
-function escapeRegex(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function openSourceDocViewer() {
-  try {
-    const corpusInput = document.getElementById('corpusInput');
-    let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (window.currentUploadedCorpus || '');
-    
-    const container = document.getElementById('sourceDocLinesContainer');
-    const modal = document.getElementById('sourceDocModal');
-    const targetBadge = document.getElementById('docViewerTargetBadge');
-    const modalTitle = document.getElementById('sourceDocModalTitle');
-
-    if (!fullCorpus) {
-      fullCorpus = "Doküman içeriği henüz yüklenmedi.";
-    }
-
-    const docName = window.activeTargetDoc || window.currentUploadedDocName || 'Dokuman.pdf';
-    modalTitle.textContent = `📖 Kaynak Doküman: ${docName}`;
-    const targetLine = window.activeTargetLineNumber || 1;
-    targetBadge.textContent = `📍 Hedef: Satır #${targetLine}`;
-
-    const lines = fullCorpus.split('\n');
-    let html = '';
-
-    lines.forEach((line, idx) => {
-      const lineNum = idx + 1;
-      const isTarget = (lineNum === targetLine);
-      const targetClass = isTarget ? 'doc-line active-highlight-line' : 'doc-line';
-      const targetId = `doc_line_${lineNum}`;
-      
-      let lineContentHtml = escapeHtml(line || ' ');
-      if (isTarget && window.activeTargetSentence) {
-        try {
-          const kw = window.activeTargetSentence.split(/\s+/).filter(w => w.length > 5);
-          kw.forEach(w => {
-            const regex = new RegExp(`(${escapeRegex(w)})`, 'gi');
-            lineContentHtml = lineContentHtml.replace(regex, '<mark style="background:#f59e0b; color:#000; padding:0 2px; border-radius:2px;">$1</mark>');
-          });
-        } catch (e) {}
-      }
-
-      html += `
-        <div id="${targetId}" class="${targetClass}">
-          <div class="doc-line-num">${lineNum}</div>
-          <div class="doc-line-text">${lineContentHtml}</div>
-        </div>
-      `;
-    });
-
-    container.innerHTML = html;
-    modal.style.display = 'flex';
-
-    // Smooth scroll to target line
-    setTimeout(() => {
-      const targetEl = document.getElementById(`doc_line_${targetLine}`);
-      if (targetEl) {
-        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 100);
-  } catch (err) {
-    console.error("Doc viewer open error:", err);
-  }
-}
-
-function closeSourceDocModal() {
-  const modal = document.getElementById('sourceDocModal');
-  if (modal) modal.style.display = 'none';
-}
-
-// --- Stres Testi Modal Koşturucu ---
+// ==========================================================================
+// 8. MODALS & BENCHMARK CONTROLLER
+// ==========================================================================
 function openBenchmarkModal() {
   document.getElementById('benchmarkModal').style.display = 'flex';
 }
-
 function closeBenchmarkModal() {
   document.getElementById('benchmarkModal').style.display = 'none';
+}
+
+function openChunksModal() {
+  const modal = document.getElementById('chunksModal');
+  const tbody = document.getElementById('chunksTableTbody');
+  const chunks = state.uploadedChunks || [];
+
+  modal.style.display = 'flex';
+
+  if (chunks.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted" style="padding: 2rem;">Henüz ayrıştırılmış chunk bulunamadı.</td></tr>`;
+    return;
+  }
+
+  let html = '';
+  chunks.forEach((c, i) => {
+    const docId = c.documentId || c.DocumentId || `Bölüm_${i + 1}`;
+    const len = c.length || c.Length || (c.content ? c.content.length : 0);
+    const content = escapeHtml(c.content || c.Content || '');
+    html += `
+      <tr>
+        <td style="color: var(--text-muted); font-family: var(--font-mono);">${i + 1}</td>
+        <td style="font-weight: 500; color: var(--primary);">${escapeHtml(docId)}</td>
+        <td style="font-family: var(--font-mono); color: var(--text-secondary);">${len} char</td>
+        <td style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary); line-height: 1.4;">${content}</td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = html;
+}
+function closeChunksModal() {
+  document.getElementById('chunksModal').style.display = 'none';
+}
+
+function openSourceDocViewer() {
+  const corpusInput = document.getElementById('corpusInput');
+  let fullCorpus = (corpusInput && corpusInput.value.trim()) ? corpusInput.value.trim() : (state.uploadedCorpus || '');
+
+  const container = document.getElementById('sourceDocLinesContainer');
+  const modal = document.getElementById('sourceDocModal');
+  const targetBadge = document.getElementById('docViewerTargetBadge');
+  const modalTitle = document.getElementById('sourceDocModalTitle');
+
+  const docName = state.activeTargetDoc || state.uploadedDocName || 'Dokuman.pdf';
+  modalTitle.textContent = `Kaynak Doküman: ${docName}`;
+  const targetLine = state.activeTargetLineNumber || 1;
+  targetBadge.textContent = `Hedef: Satır #${targetLine}`;
+
+  const lines = (fullCorpus || "Doküman içeriği henüz yüklenmedi.").split('\n');
+  let html = '';
+
+  lines.forEach((line, idx) => {
+    const lineNum = idx + 1;
+    const isTarget = (lineNum === targetLine);
+    const targetClass = isTarget ? 'doc-line active-highlight-line' : 'doc-line';
+    const targetId = `doc_line_${lineNum}`;
+
+    let lineContentHtml = escapeHtml(line || ' ');
+    if (isTarget && state.activeTargetSentence) {
+      const kw = state.activeTargetSentence.split(/\s+/).filter(w => w.length > 5);
+      kw.forEach(w => {
+        const regex = new RegExp(`(${escapeRegex(w)})`, 'gi');
+        lineContentHtml = lineContentHtml.replace(regex, '<mark style="background:var(--warning); color:#000; padding:0 2px; border-radius:2px;">$1</mark>');
+      });
+    }
+
+    html += `
+      <div id="${targetId}" class="${targetClass}">
+        <div class="doc-line-num">${lineNum}</div>
+        <div class="doc-line-text">${lineContentHtml}</div>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+  modal.style.display = 'flex';
+
+  setTimeout(() => {
+    const targetEl = document.getElementById(`doc_line_${targetLine}`);
+    if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 100);
+}
+function closeSourceDocModal() {
+  document.getElementById('sourceDocModal').style.display = 'none';
 }
 
 async function runLiveBenchmark() {
   const btn = document.getElementById('runBenchmarkBtn');
   const tbody = document.getElementById('benchmarkCasesTbody');
-  
+
   btn.disabled = true;
-  btn.textContent = "⏳ Koşturuluyor (Needle in a Haystack & GPU)...";
-  tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 2rem;"><span style="color:#06b6d4;">⚙️ 10 Çöp Doküman Arasına Gizlenmiş Tıbbi İğne Test Ediliyor...</span></td></tr>`;
+  btn.textContent = "Testler Koşturuluyor...";
+  tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 2rem;">Gürültülü dokümanlar arasına gizlenmiş tıbbi senaryolar test ediliyor...</td></tr>`;
 
   try {
-    const res = await fetch(`${API_BASE}/api/lab/stress-test`, { method: 'POST' });
-    if (res.ok) {
-      const data = await res.json();
-      
-      document.getElementById('bmPassRate').textContent = `${data.passRate}% (${data.passedTests}/${data.totalTests})`;
-      document.getElementById('bmFaithfulness').textContent = `${data.avgFaithfulness}%`;
-      document.getElementById('bmTotalTime').textContent = `${data.totalLatencyMs} ms`;
-      document.getElementById('bmGpuSpeed').textContent = data.gpuBenchmark.isGpuActive ? `${data.gpuBenchmark.latencyMs} ms` : "CPU";
+    const data = await api.runStressTest();
 
-      let rowsHtml = '';
-      data.testCases.forEach(tc => {
-        rowsHtml += `
-          <tr>
-            <td class="tc-id">${tc.id || tc.Id}</td>
-            <td><strong>${tc.name || tc.Name}</strong><br/><span style="color:#64748b; font-size:0.7rem;">Durum: ${tc.finalState || tc.FinalState}</span></td>
-            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">${tc.query || tc.Query}</td>
-            <td style="font-family:var(--font-mono); font-weight:bold; color:${(tc.faithfulness || tc.Faithfulness) > 0.7 ? '#10b981' : '#f43f5e'}">${((tc.faithfulness || tc.Faithfulness)*100).toFixed(0)}%</td>
-            <td style="font-family:var(--font-mono);">${tc.latencyMs || tc.LatencyMs} ms</td>
-            <td><span class="verdict-tag ${tc.passed || tc.Passed ? 'pass' : 'fail'}">${tc.verdict || tc.Verdict}</span></td>
-          </tr>
-        `;
-      });
+    document.getElementById('bmPassRate').textContent = `${data.passRate}% (${data.passedTests}/${data.totalTests})`;
+    document.getElementById('bmFaithfulness').textContent = `${data.avgFaithfulness}%`;
+    document.getElementById('bmTotalTime').textContent = `${data.totalLatencyMs} ms`;
+    document.getElementById('bmGpuSpeed').textContent = data.gpuBenchmark.isGpuActive ? `${data.gpuBenchmark.latencyMs} ms` : "CPU";
 
-      if (data.gpuBenchmark && data.gpuBenchmark.isGpuActive) {
-        const gpuDevice = data.gpuBenchmark.device || 'GPU (DirectML)';
-        const modelName = 'ONNX ms-marco-MiniLM-L-6-v2'; // model adı sabit — benchmark'e özeldir
-        rowsHtml += `
-          <tr style="background: rgba(245, 158, 11, 0.08);">
-            <td class="tc-id">GPU-01</td>
-            <td><strong>${gpuDevice} Re-Ranking (Needle Match)</strong><br/><span style="color:#f59e0b; font-size:0.7rem;">${modelName}</span></td>
-            <td style="max-width:260px; font-family:var(--font-mono); font-size:0.7rem;">${data.gpuBenchmark.topChunk || ''}</td>
-            <td style="font-family:var(--font-mono); font-weight:bold; color:#10b981;">Skor: ${(data.gpuBenchmark.topScore*100).toFixed(1)}%</td>
-            <td style="font-family:var(--font-mono); font-weight:bold; color:#f59e0b;">${data.gpuBenchmark.latencyMs} ms</td>
-            <td><span class="verdict-tag pass">🚀 GPU ZİRVE</span></td>
-          </tr>
-        `;
-      }
+    let rowsHtml = '';
+    data.testCases.forEach(tc => {
+      rowsHtml += `
+        <tr>
+          <td style="font-family:var(--font-mono); color:var(--text-muted);">${tc.id || tc.Id}</td>
+          <td><strong>${escapeHtml(tc.name || tc.Name)}</strong></td>
+          <td style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-secondary); max-width:240px;">${escapeHtml(tc.query || tc.Query)}</td>
+          <td style="font-family:var(--font-mono); font-weight:600; color:${(tc.faithfulness || tc.Faithfulness) > 0.7 ? 'var(--success)' : 'var(--danger)'}">${((tc.faithfulness || tc.Faithfulness) * 100).toFixed(0)}%</td>
+          <td style="font-family:var(--font-mono);">${tc.latencyMs || tc.LatencyMs} ms</td>
+          <td><span class="verdict-tag ${tc.passed || tc.Passed ? 'pass' : 'fail'}">${tc.verdict || tc.Verdict}</span></td>
+        </tr>
+      `;
+    });
 
-      tbody.innerHTML = rowsHtml;
+    if (data.gpuBenchmark && data.gpuBenchmark.isGpuActive) {
+      rowsHtml += `
+        <tr style="background: rgba(245, 158, 11, 0.05);">
+          <td style="font-family:var(--font-mono); color:var(--warning);">GPU-01</td>
+          <td><strong>${escapeHtml(data.gpuBenchmark.device || 'DirectML GPU')} Re-Ranking</strong></td>
+          <td style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-secondary);">${escapeHtml(data.gpuBenchmark.topChunk || '')}</td>
+          <td style="font-family:var(--font-mono); font-weight:600; color:var(--success);">%${(data.gpuBenchmark.topScore * 100).toFixed(1)}</td>
+          <td style="font-family:var(--font-mono); font-weight:600; color:var(--warning);">${data.gpuBenchmark.latencyMs} ms</td>
+          <td><span class="verdict-tag pass">GPU Zirve</span></td>
+        </tr>
+      `;
     }
+
+    tbody.innerHTML = rowsHtml;
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#f43f5e; padding: 2rem;">API Bağlantı Hatası: ${err.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--danger); padding:2rem;">Hata: ${escapeHtml(err.message)}</td></tr>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = "⚡ TESTLERİ KOŞTUR";
+    btn.textContent = "Testleri Yeniden Çalıştır";
   }
 }
 
-// 8. Multi-format Document Ingestion (PDF, TXT, MD, JSON, CSV) & Drag-and-Drop
-let selectedUploadFile = null;
-
+// ==========================================================================
+// 9. FILE INGESTION & PERSISTENT CORPUS MANAGER (SQLite)
+// ==========================================================================
 function handleFileSelected(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  setupFileForUpload(file);
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  setupFilesForUpload(files);
 }
 
-function setupFileForUpload(file) {
-  selectedUploadFile = file;
+function setupFilesForUpload(files) {
   const label = document.getElementById('uploadFileNameLabel');
   const btn = document.getElementById('uploadProcessBtn');
   const pwGroup = document.getElementById('pdfPasswordGroup');
   const status = document.getElementById('uploadStatusBadge');
 
-  const sizeKb = (file.size / 1024).toFixed(1);
-  if (label) label.innerHTML = `📄 <strong>${file.name}</strong> (${sizeKb} KB)`;
-  if (btn) {
-    btn.style.display = 'block';
-    btn.textContent = `⚡ "${file.name}" Dosyasını Çıkar & Ekle`;
+  const fileCount = files.length;
+  if (fileCount === 1) {
+    const sizeKb = (files[0].size / 1024).toFixed(1);
+    if (label) label.textContent = `${files[0].name} (${sizeKb} KB)`;
+  } else {
+    let totalSizeKb = 0;
+    for (let i = 0; i < files.length; i++) totalSizeKb += files[i].size;
+    totalSizeKb = (totalSizeKb / 1024).toFixed(1);
+    if (label) label.textContent = `${fileCount} Dosya Seçildi (${totalSizeKb} KB Toplam)`;
   }
+
+  if (btn) btn.style.display = 'inline-flex';
   if (status) status.style.display = 'none';
 
-  // PDF ise parola alanını göster
-  if (file.name.toLowerCase().endsWith('.pdf')) {
-    if (pwGroup) pwGroup.style.display = 'block';
-  } else {
-    if (pwGroup) pwGroup.style.display = 'none';
+  let hasPdf = false;
+  for (let i = 0; i < files.length; i++) {
+    if (files[i].name.toLowerCase().endsWith('.pdf')) hasPdf = true;
+  }
+  if (hasPdf && pwGroup) {
+    pwGroup.style.display = 'block';
+  } else if (pwGroup) {
+    pwGroup.style.display = 'none';
   }
 
-  // Kullanıcıyı bekletmeden hemen otomatik yükle ve ayrıştır
-  uploadAndIngestDocument();
+  uploadAndIngestDocuments(files);
 }
 
-async function uploadAndIngestDocument() {
-  if (!selectedUploadFile) return;
+async function uploadAndIngestDocuments(filesList) {
+  let targetFiles = filesList;
+  if (!targetFiles || targetFiles.length === 0) {
+    const inputFiles = document.getElementById('fileUploadInput').files;
+    if (inputFiles && inputFiles.length > 0) targetFiles = inputFiles;
+  }
+  if (!targetFiles || targetFiles.length === 0) return;
 
   const btn = document.getElementById('uploadProcessBtn');
   const status = document.getElementById('uploadStatusBadge');
   const pwInput = document.getElementById('pdfPasswordInput');
   const password = pwInput ? pwInput.value.trim() : '';
 
-  btn.disabled = true;
-  btn.textContent = '⏳ Doküman Ayrıştırılıyor...';
-  status.style.display = 'block';
-  status.className = 'upload-status loading';
-  status.textContent = 'Dosya sunucuya gönderiliyor ve metin katmanları çıkarılıyor...';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = `${targetFiles.length} Dosya İşleniyor...`;
+  }
+  if (status) {
+    status.style.display = 'block';
+    status.className = 'upload-feedback';
+    status.textContent = `${targetFiles.length} dosya sunucuya iletiliyor, PDF metinleri çıkarılıyor ve SQLite'a kaydediliyor...`;
+  }
 
   try {
-    const formData = new FormData();
-    formData.append('file', selectedUploadFile);
-    if (password) {
-      formData.append('password', password);
-    }
+    const data = await api.uploadDocuments(targetFiles, password);
 
-    const res = await fetch(`${API_BASE}/api/documents/upload`, {
-      method: 'POST',
-      body: formData
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || 'Dosya işlenirken hata oluştu.');
-    }
-
-    // Korpus alanına çıkarılan metni yerleştir
     const corpusInput = document.getElementById('corpusInput');
     if (corpusInput && data.combinedText) {
       corpusInput.value = data.combinedText;
     }
 
-    window.currentUploadedCorpus = data.combinedText || '';
-    window.currentUploadedDocName = data.fileName || 'Dokuman.pdf';
-    window.currentUploadedChunks = data.chunks || [];
+    state.uploadedCorpus = data.combinedText || '';
+    state.uploadedDocName = data.processedFiles && data.processedFiles.length > 0 
+      ? data.processedFiles.map(f => f.fileName).join(', ') 
+      : 'Toplu_Korpus.pdf';
+    state.uploadedChunks = data.chunks || [];
 
-    status.className = 'upload-status success';
-    status.innerHTML = `✅ <strong>${data.fileName}</strong> başarıyla aktarıldı!<br/>` +
-                       `📄 ${data.totalPagesOrDocs} Bölüm/Sayfa • 🧩 ${data.totalChunks} Chunk • 📝 ${data.totalCharacters} Karakter`;
-
-    btn.textContent = '✅ Korpus Güncellendi';
+    if (status) {
+      status.className = 'upload-feedback success';
+      status.innerHTML = `<strong>${targetFiles.length} Belge Kaydedildi</strong> (${data.totalCorpusChunks} toplam chunk veritabanında).`;
+    }
 
     const viewChunksBtn = document.getElementById('viewChunksBtn');
     if (viewChunksBtn && data.chunks && data.chunks.length > 0) {
-      viewChunksBtn.style.display = 'block';
-      viewChunksBtn.textContent = `📑 Çıkarılan ${data.chunks.length} Chunk'ı İncele`;
+      viewChunksBtn.style.display = 'inline-flex';
     }
 
-    const chatBadge = document.getElementById('chatActiveDocBadge');
-    if (chatBadge && data.fileName) {
-      chatBadge.innerHTML = `📄 <strong>${data.fileName}</strong> (${data.totalChunks} Chunk Aktif)`;
-    }
-
-    // PDF içeriği Parol / Parasetamol ise veya yeni dosya ise sorguyu ve aday yanıtı dokümanla uyumlu yap
-    const queryInput = document.getElementById('queryInput');
-    const candidateInput = document.getElementById('candidateResponseInput');
-    const combinedLower = (data.combinedText || '').toLowerCase();
-
-    if (combinedLower.includes('parol') || combinedLower.includes('parasetamol')) {
-      if (queryInput) queryInput.value = "Parol tablet ne için kullanılır ve yetişkin dozu nedir?";
-      if (candidateInput) candidateInput.value = "Parol hafif ve orta şiddetli ağrılarda kullanılır. Yetişkinlerde 6 saatte bir 500mg-1000mg aralığında alınabilir.";
-    } else if (combinedLower.includes('amoksisilin') || combinedLower.includes('penisilin')) {
-      if (queryInput) queryInput.value = "Penisilin alerjisinde hangi antibiyotik alternatiftir?";
-      if (candidateInput) candidateInput.value = "Şiddetli penisilin alerjisi olan hastalarda alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.";
-    }
-
-    // RAG Pipeline'ını yeni korpusla anında çalıştır
+    await loadCorpusStats();
     await executeFullPipeline();
-
   } catch (err) {
-    status.className = 'upload-status error';
-    status.innerHTML = `❌ Hata: ${err.message}`;
-    btn.textContent = '⚠️ Yeniden Dene';
+    if (status) {
+      status.className = 'upload-feedback error';
+      status.textContent = `Yükleme Hatası: ${err.message}`;
+    }
   } finally {
-    btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Yeni Dosyalar Yükle';
+    }
   }
 }
 
-// --- Chunk Explorer Modal ---
-function openChunksModal() {
-  const modal = document.getElementById('chunksModal');
-  const tbody = document.getElementById('chunksTableTbody');
-  const sub = document.getElementById('chunksModalSub');
-  const chunks = window.currentUploadedChunks || [];
+async function loadCorpusStats() {
+  try {
+    const data = await api.getDocuments();
+    const badge = document.getElementById('corpusCountBadge');
+    if (badge) badge.textContent = data.totalDocuments || '0';
 
-  if (!modal || !tbody) return;
+    const chatBadge = document.getElementById('chatActiveDocBadge');
+    if (chatBadge) {
+      if (data.totalDocuments > 0) {
+        chatBadge.textContent = `${data.totalDocuments} Belge • ${data.totalChunks} Chunk [SQLite]`;
+      } else {
+        chatBadge.textContent = 'Klinik Korpus (Varsayılan)';
+      }
+    }
+  } catch (err) {
+    console.error("Corpus stats load error:", err);
+  }
+}
 
-  modal.style.display = 'flex';
-  sub.textContent = `Toplam ${chunks.length} ayrıştırılmış chunk parçası ve metadata istatistiği`;
+function openCorpusModal() {
+  const modal = document.getElementById('corpusModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    refreshCorpusModal();
+  }
+}
 
-  if (chunks.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding: 2rem; color:#64748b;">Henüz ayrıştırılmış chunk bulunamadı.</td></tr>`;
+function closeCorpusModal() {
+  const modal = document.getElementById('corpusModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function refreshCorpusModal() {
+  const tbody = document.getElementById('corpusTableTbody');
+  const statDocs = document.getElementById('corpusStatDocs');
+  const statChunks = document.getElementById('corpusStatChunks');
+  const statChars = document.getElementById('corpusStatChars');
+
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 1.5rem;">Yükleniyor...</td></tr>`;
+  }
+
+  try {
+    const data = await api.getDocuments();
+
+    if (statDocs) statDocs.textContent = data.totalDocuments || 0;
+    if (statChunks) statChunks.textContent = data.totalChunks || 0;
+    if (statChars) statChars.textContent = data.totalCharacters ? data.totalCharacters.toLocaleString('tr-TR') : 0;
+
+    if (!data.documents || data.documents.length === 0) {
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted" style="padding: 2rem;">Henüz kalıcı SQLite veritabanında doküman bulunmuyor. Sol panelden veya Chat'ten PDF yükleyebilirsiniz.</td></tr>`;
+      }
+      return;
+    }
+
+    let rowsHtml = '';
+    data.documents.forEach((d) => {
+      const sizeKb = (d.fileSizeBytes / 1024).toFixed(1);
+      const dateStr = d.uploadedAt ? new Date(d.uploadedAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '---';
+
+      rowsHtml += `
+        <tr>
+          <td><strong style="color: var(--text-primary);">${escapeHtml(d.fileName)}</strong></td>
+          <td style="font-family: var(--font-mono);">${d.totalPages} Sayfa</td>
+          <td style="font-family: var(--font-mono);"><span class="table-tag" style="background:rgba(56,189,248,0.15); color:#38bdf8;">${d.totalChunks} Chunk</span></td>
+          <td style="font-family: var(--font-mono); color: var(--text-muted);">${sizeKb} KB</td>
+          <td style="font-size: 0.72rem; color: var(--text-muted);">${dateStr}</td>
+          <td style="text-align: center;">
+            <button class="btn btn-outline btn-sm text-danger" style="padding: 0.15rem 0.4rem; font-size: 0.68rem;" onclick="deleteCorpusDocument('${escapeHtml(d.id)}')">
+              Sil
+            </button>
+          </td>
+        </tr>
+      `;
+    });
+
+    if (tbody) tbody.innerHTML = rowsHtml;
+  } catch (err) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger" style="padding: 1.5rem;">Hata: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+}
+
+async function deleteCorpusDocument(docId) {
+  if (!confirm(`"${docId}" dokümanını ve tüm chunk'larını SQLite veritabanından silmek istediğinize emin misiniz?`)) {
     return;
   }
 
-  let html = '';
-  chunks.forEach((c, i) => {
-    const docId = c.documentId || c.DocumentId || `Sayfa_${i + 1}`;
-    const len = c.length || c.Length || (c.content ? c.content.length : 0);
-    const content = (c.content || c.Content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    html += `
-      <tr>
-        <td class="tc-id" style="width:40px;">${i + 1}</td>
-        <td style="width:130px; font-weight:bold; color:#38bdf8;">${docId}</td>
-        <td style="width:100px; font-family:var(--font-mono); font-size:0.75rem; color:#a855f7;">${len} karakter</td>
-        <td style="font-family:var(--font-mono); font-size:0.72rem; line-height:1.4; color:#cbd5e1; max-width:550px;">
-          ${content}
-        </td>
-      </tr>
-    `;
-  });
-  tbody.innerHTML = html;
+  try {
+    await api.deleteDocument(docId);
+    await refreshCorpusModal();
+    await loadCorpusStats();
+    await executeFullPipeline();
+  } catch (err) {
+    alert(`Silinemedi: ${err.message}`);
+  }
 }
 
-function closeChunksModal() {
-  const modal = document.getElementById('chunksModal');
-  if (modal) modal.style.display = 'none';
+async function clearEntireCorpus() {
+  if (!confirm("DİKKAT: Veritabanındaki TÜM dokümanlar ve chunk'lar kalıcı olarak silinecek. Emin misiniz?")) {
+    return;
+  }
+
+  try {
+    await api.clearDocuments();
+    await refreshCorpusModal();
+    await loadCorpusStats();
+    state.uploadedCorpus = null;
+    state.uploadedDocName = null;
+    state.uploadedChunks = [];
+    await executeFullPipeline();
+  } catch (err) {
+    alert(`Temizlenemedi: ${err.message}`);
+  }
 }
 
 function setupDragAndDrop() {
   const dropzone = document.getElementById('uploadDropzone');
   if (!dropzone) return;
 
-  ['dragenter', 'dragover'].forEach(eventName => {
-    dropzone.addEventListener(eventName, (e) => {
+  ['dragenter', 'dragover'].forEach(name => {
+    dropzone.addEventListener(name, (e) => {
       e.preventDefault();
       e.stopPropagation();
       dropzone.classList.add('drag-over');
     }, false);
   });
 
-  ['dragleave', 'drop'].forEach(eventName => {
-    dropzone.addEventListener(eventName, (e) => {
+  ['dragleave', 'drop'].forEach(name => {
+    dropzone.addEventListener(name, (e) => {
       e.preventDefault();
       e.stopPropagation();
       dropzone.classList.remove('drag-over');
@@ -1182,33 +1426,34 @@ function setupDragAndDrop() {
 
   dropzone.addEventListener('drop', (e) => {
     const dt = e.dataTransfer;
-    const files = dt.files;
-    if (files && files.length > 0) {
-      setupFileForUpload(files[0]);
+    if (dt.files && dt.files.length > 0) {
+      setupFilesForUpload(dt.files);
     }
   }, false);
 }
 
-// Window Resize
-window.addEventListener('resize', () => {
-  if (vectorChartInstance) vectorChartInstance.resize();
-  if (triadChartInstance) triadChartInstance.resize();
-  if (hardwareChartInstance) hardwareChartInstance.resize();
-});
-
-// Global Keyboard Shortcuts (ESC to close modals or exit fullscreen)
+// Global ESC key listener for modals & fullscreen
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeSourceDocModal();
     closeChunksModal();
     closeBenchmarkModal();
-    document.querySelectorAll('.viz-box.fullscreen-viz').forEach(el => el.classList.remove('fullscreen-viz'));
+    closeCorpusModal();
+    document.querySelectorAll('.chart-card.fullscreen-viz').forEach(el => el.classList.remove('fullscreen-viz'));
+    resizeAllCharts();
   }
 });
 
-// Init
+// Window resize handler
+window.addEventListener('resize', resizeAllCharts);
+
+// ==========================================================================
+// 10. INITIALIZATION
+// ==========================================================================
 document.addEventListener('DOMContentLoaded', async () => {
   setupDragAndDrop();
   await checkApiHealth();
+  await loadCorpusStats();
+  // By default start in the active tab (chat or lab)
   await executeFullPipeline();
 });

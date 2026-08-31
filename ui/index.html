@@ -3,416 +3,543 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TrustLab — Bilimsel RAG & Embedding Laboratuvarı</title>
+  <title>TrustLab — Deterministic RAG & Guardrail Engine</title>
   
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   
-  <!-- ECharts & Vis.js -->
+  <!-- ECharts -->
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260831_3">
 </head>
-<body class="dark-theme">
+<body>
 
-  <!-- Top App Bar (Fixed Header) -->
-  <header class="app-header">
-    <div class="top-nav-left">
-      <div class="logo-box">
-        <span class="logo-icon">🛡️</span>
-        <div class="logo-text">
-          <h1>TrustLab <span class="badge-tag">RAG & CLINICAL OBSERVABILITY</span></h1>
-          <span class="sub-text">Deterministic Guardrails • Zero-Hallucination SLA • RTX 4060 Ti</span>
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-left">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">TrustLab</span>
+          <span class="brand-badge">RAG &amp; Observability</span>
         </div>
       </div>
-      <!-- Mode Switcher -->
-      <div class="mode-tabs">
-        <button id="tabLabMode" class="mode-tab-btn active" onclick="switchViewMode('lab')">🔬 Deney Laboratuvarı</button>
-        <button id="tabChatMode" class="mode-tab-btn" onclick="switchViewMode('chat')">💬 Klinik Chat & RAG Inspector</button>
-      </div>
+
+      <nav class="nav-tabs">
+        <button id="tabLabMode" class="nav-tab active" onclick="switchViewMode('lab')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 2v7.31M14 2v7.31M8.5 2h7M14 9.3a6.5 6.5 0 1 1-4 0"/>
+          </svg>
+          <span>Deney Laboratuvarı</span>
+        </button>
+        <button id="tabChatMode" class="nav-tab" onclick="switchViewMode('chat')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>Klinik Chat &amp; Inspector</span>
+        </button>
+      </nav>
     </div>
-    <div class="header-controls">
-      <div id="apiStatusBadge" class="api-status-badge">
-        <span class="status-dot pulsing"></span>
-        <span id="apiStatusText">C# .NET API Bağlanıyor...</span>
+
+    <div class="nav-right">
+      <div id="apiStatusBadge" class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="apiStatusText" class="status-text">Bağlanıyor...</span>
       </div>
-      <button class="benchmark-btn-top" onclick="openBenchmarkModal()">🧪 STRES TESTİ / LAB</button>
-      <button class="preset-btn active" onclick="loadExperimentPreset('hybrid_match')">⚡ 1: Hibrit Eşleşme</button>
-      <button class="preset-btn" onclick="loadExperimentPreset('exact_keyword')">🔤 2: Nadir Kelime (BM25)</button>
-      <button class="preset-btn" onclick="loadExperimentPreset('hallucination_trap')">🚨 3: Halüsinasyon Tuzağı</button>
-      <button class="run-btn-top" onclick="executeFullPipeline()">⚡ ÇALIŞTIR</button>
+
+      <div class="nav-actions">
+        <button id="navCorpusBtn" class="btn btn-outline btn-sm" onclick="openCorpusModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+          <span>Korpus Havuzu</span>
+          <span id="corpusCountBadge" class="badge-count">0</span>
+        </button>
+
+        <button class="btn btn-secondary btn-sm" onclick="openBenchmarkModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <span>Stres Testi</span>
+        </button>
+        <div class="dropdown-wrapper">
+          <button id="presetDropdownBtn" class="btn btn-outline btn-sm" onclick="togglePresetDropdown()">
+            <span>Senaryolar</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </button>
+          <div id="presetDropdown" class="dropdown-menu">
+            <button class="dropdown-item" onclick="loadExperimentPreset('hybrid_match')">
+              <strong>1. Hibrit Eşleşme</strong>
+              <small>Klinik antibiyotik ve kontrendikasyon</small>
+            </button>
+            <button class="dropdown-item" onclick="loadExperimentPreset('exact_keyword')">
+              <strong>2. Nadir Kelime (BM25)</strong>
+              <small>Hata kodu ve teknik terim araması</small>
+            </button>
+            <button class="dropdown-item" onclick="loadExperimentPreset('hallucination_trap')">
+              <strong>3. Halüsinasyon Tuzağı</strong>
+              <small>Uydurma bulut şifreleme iddiası</small>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 
-  <!-- Main Viewport Workspace (TensorBoard Style Split View) -->
-  <div id="labViewContainer" class="app-workspace">
+  <!-- VIEW 1: Clinical Chat & RAG Inspector -->
+  <div id="chatViewContainer" class="view-container chat-layout" style="display: none;">
     
-    <!-- Left Sidebar: Controls, Corpus & Live Grounding (Scrollable) -->
-    <aside class="sidebar-panel">
-      
-      <!-- Input Section -->
-      <div class="side-card">
-        <div class="card-head">
-          <span class="side-tag">GİRDİ</span>
-          <h3>Arama Sorgusu & Parametreler</h3>
-        </div>
-        <div class="form-group">
-          <label>🔍 Arama Sorgusu (Query):</label>
-          <input type="text" id="queryInput" class="custom-input" value="TrustLab guardrail mimarisi sıfır halüsinasyon sağlar">
-        </div>
-        <div class="sliders-grid">
-          <div class="slider-row">
-            <label>RRF (k): <span id="rrfKVal">60</span></label>
-            <input type="range" id="rrfKRange" min="10" max="100" value="60" oninput="updateParams()">
-          </div>
-          <div class="slider-row">
-            <label>Rerank Eşiği: <span id="rerankThresholdVal">0.25</span></label>
-            <input type="range" id="rerankThresholdRange" min="0.10" max="0.80" step="0.05" value="0.25" oninput="updateParams()">
-          </div>
-          <div class="slider-row">
-            <label>Vektör Boyutu: <span id="embedDimVal">16D</span></label>
-            <input type="range" id="embedDimRange" min="8" max="32" step="8" value="16" oninput="updateParams()">
-          </div>
-        </div>
-      </div>
-
-      <!-- Document Ingestion & File Upload Section -->
-      <div class="side-card upload-card">
-        <div class="card-head">
-          <span class="side-tag" style="background:rgba(168,85,247,0.15); color:#a855f7; border-color:rgba(168,85,247,0.3);">İÇE AKTAR</span>
-          <h3>PDF / TXT / MD Doküman Yükleyici</h3>
-        </div>
-        <div class="upload-dropzone" id="uploadDropzone" onclick="document.getElementById('fileUploadInput').click()">
-          <input type="file" id="fileUploadInput" style="display:none;" accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
-          <div class="dropzone-inner">
-            <span class="upload-icon">📄</span>
-            <div class="upload-text-box">
-              <strong id="uploadFileNameLabel">PDF, TXT veya MD Dosyasını Sürükleyin</strong>
-              <small class="upload-sub">veya bilgisayarınızdan seçmek için tıklayın</small>
-            </div>
-          </div>
-        </div>
-        <div id="pdfPasswordGroup" class="form-group" style="display: none; margin-top: 0.6rem;">
-          <label style="color:#f59e0b;">🔒 Kilitli / Şifreli PDF Parolası (Opsiyonel):</label>
-          <input type="password" id="pdfPasswordInput" class="custom-input" placeholder="PDF şifresi (varsa)...">
-        </div>
-        <button id="uploadProcessBtn" class="upload-action-btn" style="display:none;" onclick="uploadAndIngestDocument()">
-          ⚡ Metinleri Çıkar & Korpus'a Ekle
-        </button>
-        <div id="uploadStatusBadge" class="upload-status" style="display: none;"></div>
-        <button id="viewChunksBtn" class="upload-action-btn" style="display:none; background:rgba(99,102,241,0.2); border:1px solid #6366f1; margin-top:0.4rem;" onclick="openChunksModal()">
-          📑 Çıkarılan Chunk'ları İncele
-        </button>
-      </div>
-
-      <!-- Corpus Section -->
-      <div class="side-card">
-        <div class="card-head">
-          <span class="side-tag">KORPUS</span>
-          <h3>Doküman Havuzu (Chunk'lar)</h3>
-        </div>
-        <textarea id="corpusInput" class="custom-textarea" rows="4">Doküman 1: TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen C# .NET 9 araştırma motorudur.
-Doküman 2: Okapi BM25 sparse arama ve SIMD Cosine Similarity vektör benzerliği Reciprocal Rank Fusion ile birleştirilir.
-Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gerekir.</textarea>
-      </div>
-
-      <!-- Live Grounding Section -->
-      <div class="side-card">
-        <div class="card-head">
-          <span class="side-tag">TEST YANITI</span>
-          <h3>Aday Model Yanıtı (Grounding)</h3>
-        </div>
-        <div class="form-group">
-          <label>Test Edilecek Yanıt Metni:</label>
-          <textarea id="candidateResponseInput" class="custom-textarea" rows="3" oninput="executeFullPipeline()">Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.</textarea>
-        </div>
-      </div>
-
-    </aside>
-
-    <!-- Right Main Stage: 2x2 Scientific Visualizers (Fills Screen) -->
-    <main class="visualizers-grid">
-      
-      <!-- Chart 1: 2D Vector Space & L2 Distance -->
-      <div id="vizBox1" class="viz-box">
-        <div class="viz-bar">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span class="viz-badge">1. VEKTÖR UZAYI & L2</span>
-            <h4>Vektör Uzayı & Cosine / L2 Geometrik Haritası</h4>
-          </div>
-          <button class="viz-expand-btn" title="Tam Ekran / Büyüt (Mouse ile Yakınlaştır / Kaydır)" onclick="toggleFullscreenViz('vizBox1')">⛶</button>
-        </div>
-        <div id="vectorSpaceChart" class="chart-canvas"></div>
-      </div>
-
-      <!-- Chart 2: RAG Triad Radar & Precision Bars -->
-      <div id="vizBox2" class="viz-box">
-        <div class="viz-bar">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span class="viz-badge cyan">2. RAG TRIAD</span>
-            <h4>RAG Triad Metrikleri (Context Relevancy • Faithfulness • Answer Relevancy)</h4>
-          </div>
-          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox2')">⛶</button>
-        </div>
-        <div id="ragTriadChart" class="chart-canvas"></div>
-      </div>
-
-      <!-- Chart 3: Hardware Profiling & Ranking Metrics (NDCG, MRR, GPU Latency) -->
-      <div id="vizBox3" class="viz-box">
-        <div class="viz-bar">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span class="viz-badge yellow">3. DONANIM PROFILING & NDCG</span>
-            <h4>Donanım Gecikme Dağılımı (CPU SIMD vs BM25 vs RTX 4060 Ti GPU)</h4>
-          </div>
-          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox3')">⛶</button>
-        </div>
-        <div id="hardwareProfilingChart" class="chart-canvas"></div>
-      </div>
-
-      <!-- Chart 4: Sentence-by-Sentence Grounding Proof Explorer -->
-      <div id="vizBox4" class="viz-box">
-        <div class="viz-bar">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span class="viz-badge emerald">4. KANIT & GROUNDING</span>
-            <h4>Cümle Bazlı Olgusal Kanıt & Doküman Eşleşme İnceleyicisi</h4>
-          </div>
-          <button class="viz-expand-btn" title="Tam Ekran / Büyüt" onclick="toggleFullscreenViz('vizBox4')">⛶</button>
-        </div>
-        <div id="groundingProofExplorer" class="chart-canvas scrollable-canvas"></div>
-      </div>
-
-    </main>
-  </div>
-
-  <!-- VIEW 2: Clinical Chat & RAG Inspector (Split-View Drawer) -->
-  <div id="chatViewContainer" class="clinical-chat-layout" style="display: none;">
-    
-    <!-- Left Column: Medical Assistant Chat Stream (55%) -->
-    <section class="chat-section">
-      <div class="chat-header-bar">
-        <div class="chat-status-indicator">
-          <span class="pulse-dot"></span>
-          <span><strong>Klinik Karar Destek Asistanı</strong></span>
-          <span id="chatActiveDocBadge" style="margin-left:0.6rem; font-size:0.7rem; color:#38bdf8; background:rgba(56,189,248,0.12); padding:0.2rem 0.5rem; border-radius:4px; border:1px solid rgba(56,189,248,0.3);">📄 Aktif Belge: Varsayılan Klinik Korpus</span>
+    <!-- Left Column: Chat Conversation Stream -->
+    <section class="chat-pane">
+      <div class="pane-header">
+        <div class="chat-context-info">
+          <span class="context-label">Aktif Belge:</span>
+          <span id="chatActiveDocBadge" class="context-pill">Klinik Korpus (Varsayılan)</span>
         </div>
         <div class="quick-prompts">
-          <button class="quick-btn" onclick="sendQuickPrompt('penicillin')">💊 Penisilin Kontrendikasyonu</button>
-          <button class="quick-btn" onclick="sendQuickPrompt('paracetamol')">💉 Parasetamol Dozajı</button>
-          <button class="quick-btn red-btn" onclick="sendQuickPrompt('hallucination_test')">⚠️ Halüsinasyon Tuzağı</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('penicillin')">Penisilin Kontrendikasyonu</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('paracetamol')">Parasetamol Dozajı</button>
+          <button class="prompt-chip warning" onclick="sendQuickPrompt('hallucination_test')">Halüsinasyon Tuzağı</button>
         </div>
       </div>
 
-      <div id="chatMessagesStream" class="chat-messages-stream">
+      <div id="chatMessagesStream" class="chat-messages">
         <!-- Initial Welcome Message -->
-        <div class="chat-msg ai-msg">
-          <div class="msg-avatar">🤖</div>
-          <div class="msg-bubble">
-            <div class="msg-meta">Klinik AI Asistanı • Grounding Aktif</div>
-            <div class="msg-content">
-              Merhaba Doktor Bey/Hanım. Tıbbi sorularınızı yanıtlamak için hazırım. Ürettiğim her cümle arka planda <strong>RAG Inspector</strong> tarafından anlık olarak PDF prospektüslerle ve dozaj kural motoruyla denetlenmektedir. Yanıtlardaki cümlelerin üzerine tıklayarak kaynak dokümanı sağ panelde inceleyebilirsiniz.
-            </div>
+        <div class="msg-card msg-assistant">
+          <div class="msg-header">
+            <span class="msg-sender">Klinik Asistan</span>
+            <span class="msg-tag">Grounding Aktif</span>
+          </div>
+          <div class="msg-body">
+            Klinik karar destek asistanı hazır. Tıbbi sorularınızı yanıtlayabilir, yüklenen PDF prospektüsleri inceleyebilirim. Üretilen her iddia arka planda deterministik guardrail bileşenleriyle denetlenir.
           </div>
         </div>
       </div>
 
-      <div class="chat-input-wrapper">
+      <div class="chat-input-container">
         <div class="chat-input-box">
           <input type="file" id="chatDirectFileInput" style="display:none;" accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
-          <button class="chat-attach-btn" title="PDF / Prospektüs / Belge Yükle" onclick="document.getElementById('chatDirectFileInput').click()">📎</button>
-          <textarea id="chatInputText" placeholder="Klinik sorunuzu yazın (Örn: Parol ne için kullanılır veya yetişkin dozu nedir?)" rows="2" onkeydown="handleChatKeyDown(event)"></textarea>
-          <button id="sendChatBtn" class="send-msg-btn" onclick="sendChatMessage()">
-            <span>Gönder</span> ➔
+          <button class="btn-icon" title="Belge Yükle (PDF, TXT, MD)" onclick="document.getElementById('chatDirectFileInput').click()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <textarea id="chatInputText" placeholder="Klinik sorunuzu yazın (Örn: Parol ne için kullanılır veya yetişkin dozu nedir?)" rows="1" onkeydown="handleChatKeyDown(event)" oninput="autoResizeTextarea(this)"></textarea>
+          <button id="sendChatBtn" class="btn btn-primary btn-sm" onclick="sendChatMessage()">
+            <span>Gönder</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
           </button>
         </div>
       </div>
     </section>
 
-    <!-- Right Column: RAG Inspector & Live Observability Drawer (45%) -->
-    <aside class="inspector-section">
-      <div class="inspector-header">
+    <!-- Right Column: RAG Inspector & Live Observability Drawer -->
+    <aside class="inspector-pane">
+      <div class="pane-header">
         <div class="inspector-title">
-          <span class="inspector-icon">🔍</span>
-          <div>
-            <h3>RAG Observability & Inspector</h3>
-            <span class="sub-text">Mesaj Bazlı Gerçek Zamanlı Telemetri & Olgusal Doğrulama</span>
+          <h3>RAG Inspector</h3>
+          <span class="inspector-sub">Canlı Telemetri &amp; Olgusal Doğrulama</span>
+        </div>
+        <span id="activeMessageBadge" class="tag-badge">msg_init</span>
+      </div>
+
+      <div class="inspector-content">
+        <!-- 1. Metric Tiles Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="metric-label">Retrieval Score</span>
+            <span id="inspConfidence" class="metric-value">---</span>
+            <span class="metric-hint">Top-1 Re-rank Skoru</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Re-Ranker Lift</span>
+            <span id="inspRerankLift" class="metric-value">---</span>
+            <span class="metric-hint">Cross-Encoder Kazancı</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Context Relevancy</span>
+            <span id="inspContextRel" class="metric-value">---</span>
+            <span class="metric-hint">Arama Hassasiyeti</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Faithfulness</span>
+            <span id="inspFaithfulness" class="metric-value">---</span>
+            <span class="metric-hint">Olgusal Kanıt Oranı</span>
           </div>
         </div>
-        <span id="activeMessageBadge" class="msg-badge-tag">msg_init</span>
-      </div>
 
-      <!-- Live Metric Cards Grid -->
-      <div class="inspector-metrics-grid">
-        <div class="insp-card">
-          <span class="insp-label">RETRIEVAL CONFIDENCE</span>
-          <span id="inspConfidence" class="insp-val green">---</span>
-          <span class="insp-sub">Top-1 Re-rank Skoru</span>
-        </div>
-        <div class="insp-card">
-          <span class="insp-label">RE-RANKER LIFT</span>
-          <span id="inspRerankLift" class="insp-val cyan">---</span>
-          <span class="insp-sub">Cross-Encoder Farkı</span>
-        </div>
-        <div class="insp-card">
-          <span class="insp-label">CONTEXT RELEVANCE</span>
-          <span id="inspContextRel" class="insp-val yellow">---</span>
-          <span class="insp-sub">Arama Hassasiyeti</span>
-        </div>
-        <div class="insp-card">
-          <span class="insp-label">FAITHFULNESS (SADAKAT)</span>
-          <span id="inspFaithfulness" class="insp-val purple">---</span>
-          <span class="insp-sub">Olgusal Kanıt Oranı</span>
-        </div>
-      </div>
-
-      <!-- Dosage & Safety Status Box -->
-      <div id="dosageLockBox" class="dosage-lock-box">
-        <div class="dosage-header">
-          <span id="dosageLockIcon">🛡️</span>
-          <strong id="dosageLockTitle">Dozaj & Etken Madde Kilidi: Bekleniyor</strong>
-        </div>
-        <div id="dosageLockDesc" class="dosage-desc">Sorunuza yanıt üretildiğinde sayısal dozajlar (mg/ml) kontrol edilir.</div>
-      </div>
-
-      <!-- Active Sentence Highlighting / Source Proof Card -->
-      <div class="proof-inspection-card">
-        <div class="card-head">
-          <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
-            <span class="side-tag">CANLI KANIT PARLATICISI</span>
-            <span id="activeLineIndicator" style="font-family:var(--font-mono); font-size:0.65rem; color:#38bdf8; font-weight:bold;"></span>
+        <!-- 2. Dosage & Safety Guard Banner -->
+        <div id="dosageLockBox" class="guard-banner">
+          <div class="guard-header">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <strong id="dosageLockTitle">Dozaj &amp; Etken Madde Kilidi</strong>
           </div>
-          <h4>Vurgulanan Cümle ve Kaynak PDF</h4>
+          <p id="dosageLockDesc" class="guard-desc">Yanıt üretildiğinde sayısal dozaj ve klinik kısıtlamalar doğrulanır.</p>
         </div>
-        <div id="activeSentenceProofContent" class="proof-content-box">
-          <span class="placeholder-text">Yanıttaki herhangi bir cümlenin üzerine gelin veya tıklayın; cümlenin dayandığı kaynak PDF sayfası burada parlayacaktır.</span>
-        </div>
-        <button id="openDocViewerBtn" class="view-source-line-btn" style="display:none;" onclick="openSourceDocViewer()">📖 PDF'te Bu Satıra Git & İncele</button>
-      </div>
 
-      <!-- Hardware Timers & DirectML GPU Footprint -->
-      <div class="hardware-footprint-card">
-        <div class="hw-mini-header">
-          <span>⚡ <strong>Donanım Profiling</strong> (NVIDIA RTX 4060 Ti DirectML)</span>
-          <span id="inspTotalTime" class="hw-total-tag">--- ms</span>
+        <!-- 3. Active Sentence Grounding Proof Inspector -->
+        <div class="section-box">
+          <div class="section-header">
+            <div class="section-title-wrap">
+              <h4>Seçili Cümle &amp; Kaynak Kanıtı</h4>
+              <span id="activeLineIndicator" class="line-badge"></span>
+            </div>
+            <button id="openDocViewerBtn" class="btn-link" style="display:none;" onclick="openSourceDocViewer()">
+              Dokümanda İncele
+            </button>
+          </div>
+          <div id="activeSentenceProofContent" class="proof-box">
+            <div class="proof-placeholder">Yanıttaki bir cümlenin üzerine tıklayarak dayandığı kaynak doküman paragrafını burada inceleyebilirsiniz.</div>
+          </div>
         </div>
-        <div class="hw-mini-grid">
-          <div class="hw-pill"><span>BM25 Sparse:</span> <strong id="inspBm25Ms">0.0 ms</strong></div>
-          <div class="hw-pill"><span>SIMD Cosine:</span> <strong id="inspSimdMs">0.0 ms</strong></div>
-          <div class="hw-pill"><span>GPU Re-Rank:</span> <strong id="inspGpuMs" style="color:#f59e0b;">0.0 ms</strong></div>
-        </div>
-      </div>
 
-      <!-- Live Decision & Reasoning Pipeline Trace -->
-      <div class="decision-trace-card">
-        <div class="hw-mini-header">
-          <span>🧠 <strong>Adım Adım Karar & Yürütme Günlüğü</strong> (Soru ➔ Yanıt)</span>
+        <!-- 4. Latency & Hardware Breakdown -->
+        <div class="section-box">
+          <div class="section-header">
+            <h4>Donanım &amp; Pipeline Süreleri</h4>
+            <span id="inspTotalTime" class="latency-total">--- ms</span>
+          </div>
+          <div class="latency-bars">
+            <div class="latency-row">
+              <span class="latency-name">SIMD Vector:</span>
+              <div class="latency-track"><div id="barSimd" class="latency-fill" style="width: 10%;"></div></div>
+              <strong id="inspSimdMs" class="latency-val">0.0 ms</strong>
+            </div>
+            <div class="latency-row">
+              <span class="latency-name">BM25 Sparse:</span>
+              <div class="latency-track"><div id="barBm25" class="latency-fill" style="width: 10%;"></div></div>
+              <strong id="inspBm25Ms" class="latency-val">0.0 ms</strong>
+            </div>
+            <div class="latency-row">
+              <span class="latency-name">GPU Re-Rank:</span>
+              <div class="latency-track"><div id="barGpu" class="latency-fill gpu" style="width: 20%;"></div></div>
+              <strong id="inspGpuMs" class="latency-val">0.0 ms</strong>
+            </div>
+          </div>
         </div>
-        <div id="decisionPipelineSteps" class="decision-steps-list">
-          <div class="step-item done"><span class="step-num">1</span> <span class="step-txt">Doküman İndeksi & Soru Vektörizasyonu</span> <span class="step-badge green">CPU SIMD</span></div>
-          <div class="step-item done"><span class="step-num">2</span> <span class="step-txt">Hibrit Arama & RRF Füzyon</span> <span class="step-badge cyan">BM25+Dense</span></div>
-          <div class="step-item done"><span class="step-num">3</span> <span class="step-txt">RTX 4060 Ti DirectML Cross-Encoder</span> <span class="step-badge yellow">GPU Top-5</span></div>
-          <div class="step-item done"><span class="step-num">4</span> <span class="step-txt">Ollama Qwen 2.5 7B Klinik Üretim</span> <span class="step-badge purple">Local LLM</span></div>
-          <div class="step-item done"><span class="step-num">5</span> <span class="step-txt">Olgusal Grounding & Dozaj Kilidi</span> <span class="step-badge green">Guardrail</span></div>
-        </div>
-      </div>
 
-      <!-- Raw Telemetry Payload Drawer (Collapsible) -->
-      <details class="telemetry-json-drawer">
-        <summary>📄 Ham Telemetry Payload JSON Görüntüleyici</summary>
-        <pre id="rawTelemetryJson">{"status": "waiting_for_message"}</pre>
-      </details>
+        <!-- 5. Step-by-step Trace -->
+        <div class="section-box">
+          <div class="section-header">
+            <h4>Yürütme Günlüğü (Trace)</h4>
+          </div>
+          <div id="decisionPipelineSteps" class="trace-steps">
+            <div class="trace-step">
+              <span class="step-index">1</span>
+              <span class="step-title">Vektörizasyon &amp; İndeks</span>
+              <span class="step-tag">CPU SIMD</span>
+            </div>
+            <div class="trace-step">
+              <span class="step-index">2</span>
+              <span class="step-title">Hibrit Arama &amp; RRF</span>
+              <span class="step-tag">BM25+Dense</span>
+            </div>
+            <div class="trace-step">
+              <span class="step-index">3</span>
+              <span class="step-title">GPU Cross-Encoder</span>
+              <span class="step-tag">DirectML</span>
+            </div>
+            <div class="trace-step">
+              <span class="step-index">4</span>
+              <span class="step-title">LLM Klinik Üretim</span>
+              <span class="step-tag">Local LLM</span>
+            </div>
+            <div class="trace-step">
+              <span class="step-index">5</span>
+              <span class="step-title">N-Gram Grounding Guard</span>
+              <span class="step-tag">Guardrail</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Raw JSON Payload -->
+        <details class="json-drawer">
+          <summary>Ham Telemetri Payload (JSON)</summary>
+          <pre id="rawTelemetryJson">{"status": "ready"}</pre>
+        </details>
+      </div>
     </aside>
 
   </div>
 
-  <!-- Benchmark Modal Window -->
-  <div id="benchmarkModal" class="benchmark-modal-backdrop" style="display: none;">
-    <div class="benchmark-modal-card">
-      <div class="modal-header">
-        <div class="modal-title-box">
-          <span class="lab-icon">🔬</span>
-          <div>
-            <h3>TrustLab Bilimsel RAG Stres Testi & Doğrulama Laboratuvarı</h3>
-            <span class="modal-sub">Deterministic Zero-Hallucination SLA • Circuit Breaker • GPU DirectML Benchmark</span>
+  <!-- VIEW 2: Scientific Lab Workbench (Charts & Analysis) -->
+  <div id="labViewContainer" class="view-container lab-layout">
+    
+    <!-- Left Sidebar: Controls & Inputs -->
+    <aside class="sidebar-pane">
+      
+      <!-- Query Card -->
+      <div class="card">
+        <div class="card-header">
+          <h4>Sorgu &amp; Parametreler</h4>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label for="queryInput">Arama Sorgusu:</label>
+            <input type="text" id="queryInput" class="input-text" value="TrustLab guardrail mimarisi sıfır halüsinasyon sağlar">
+          </div>
+          <div class="sliders-stack">
+            <div class="slider-item">
+              <div class="slider-meta">
+                <span>RRF (k):</span>
+                <strong id="rrfKVal">60</strong>
+              </div>
+              <input type="range" id="rrfKRange" min="10" max="100" value="60" oninput="updateParams()">
+            </div>
+            <div class="slider-item">
+              <div class="slider-meta">
+                <span>Rerank Eşiği:</span>
+                <strong id="rerankThresholdVal">0.25</strong>
+              </div>
+              <input type="range" id="rerankThresholdRange" min="0.10" max="0.80" step="0.05" value="0.25" oninput="updateParams()">
+            </div>
+            <div class="slider-item">
+              <div class="slider-meta">
+                <span>Vektör Boyutu:</span>
+                <strong id="embedDimVal">16D</strong>
+              </div>
+              <input type="range" id="embedDimRange" min="8" max="32" step="8" value="16" oninput="updateParams()">
+            </div>
           </div>
         </div>
-        <button class="modal-close-btn" onclick="closeBenchmarkModal()">✕</button>
+      </div>
+
+      <!-- File Upload Card -->
+      <div class="card">
+        <div class="card-header">
+          <h4>Doküman Yükleyici</h4>
+        </div>
+        <div class="card-body">
+          <div class="dropzone" id="uploadDropzone" onclick="document.getElementById('fileUploadInput').click()">
+            <input type="file" id="fileUploadInput" style="display:none;" multiple accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/>
+              <line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+            <span id="uploadFileNameLabel" class="dropzone-text">PDF, TXT veya MD dosyaları seçin (Toplu yükleme desteklenir)</span>
+          </div>
+          <div id="pdfPasswordGroup" class="field" style="display: none; margin-top: 0.5rem;">
+            <label for="pdfPasswordInput">PDF Parolası (Opsiyonel):</label>
+            <input type="password" id="pdfPasswordInput" class="input-text" placeholder="Varsa şifre...">
+          </div>
+          <div id="uploadStatusBadge" class="upload-feedback" style="display: none;"></div>
+          <div class="btn-group" style="margin-top: 0.5rem;">
+            <button id="uploadProcessBtn" class="btn btn-secondary btn-sm" style="display:none;" onclick="uploadAndIngestDocument()">Metinleri Çıkar &amp; Ekle</button>
+            <button id="viewChunksBtn" class="btn btn-outline btn-sm" style="display:none;" onclick="openChunksModal()">Chunk'ları Gör</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Corpus Card -->
+      <div class="card">
+        <div class="card-header">
+          <h4>Doküman Korpusu</h4>
+        </div>
+        <div class="card-body">
+          <textarea id="corpusInput" class="input-textarea" rows="4">Doküman 1: TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen C# .NET 10 araştırma motorudur.
+Doküman 2: Okapi BM25 sparse arama ve SIMD Cosine Similarity vektör benzerliği Reciprocal Rank Fusion ile birleştirilir.
+Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gerekir.</textarea>
+        </div>
+      </div>
+
+      <!-- Live Grounding Input -->
+      <div class="card">
+        <div class="card-header">
+          <h4>Aday Model Yanıtı</h4>
+        </div>
+        <div class="card-body">
+          <textarea id="candidateResponseInput" class="input-textarea" rows="3" oninput="executeFullPipeline()">Şiddetli penisilin alerjisi olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.</textarea>
+          <button class="btn btn-primary btn-sm" style="width: 100%; margin-top: 0.5rem;" onclick="executeFullPipeline()">Analizi Yenile</button>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Right Main Grid: 4 Visualizers -->
+    <main class="visualizers-grid">
+      
+      <!-- Chart 1: 2D Vector Space -->
+      <div id="vizBox1" class="chart-card">
+        <div class="chart-card-header">
+          <div class="chart-title">
+            <span class="chart-badge cyan">1. VEKTÖR UZAYI</span>
+            <h4>Vektör Uzayı &amp; Cosine / L2 Geometrik Haritası</h4>
+          </div>
+          <button class="btn-icon-sm" title="Tam Ekran" onclick="toggleFullscreenViz('vizBox1')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+        </div>
+        <div id="vectorSpaceChart" class="chart-body"></div>
+      </div>
+
+      <!-- Chart 2: RAG Triad Radar -->
+      <div id="vizBox2" class="chart-card">
+        <div class="chart-card-header">
+          <div class="chart-title">
+            <span class="chart-badge indigo">2. RAG TRIAD</span>
+            <h4>RAG Triad Metrikleri (Relevancy • Faithfulness)</h4>
+          </div>
+          <button class="btn-icon-sm" title="Tam Ekran" onclick="toggleFullscreenViz('vizBox2')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+        </div>
+        <div id="ragTriadChart" class="chart-body"></div>
+      </div>
+
+      <!-- Chart 3: Hardware Latency -->
+      <div id="vizBox3" class="chart-card">
+        <div class="chart-card-header">
+          <div class="chart-title">
+            <span class="chart-badge amber">3. DONANIM PROFILING</span>
+            <h4>Donanım Gecikme Dağılımı (CPU SIMD vs BM25 vs GPU)</h4>
+          </div>
+          <button class="btn-icon-sm" title="Tam Ekran" onclick="toggleFullscreenViz('vizBox3')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+        </div>
+        <div id="hardwareProfilingChart" class="chart-body"></div>
+      </div>
+
+      <!-- Chart 4: Grounding Proof Explorer -->
+      <div id="vizBox4" class="chart-card">
+        <div class="chart-card-header">
+          <div class="chart-title">
+            <span class="chart-badge emerald">4. KANIT &amp; GROUNDING</span>
+            <h4>Cümle Bazlı Olgusal Kanıt İnceleyicisi</h4>
+          </div>
+          <button class="btn-icon-sm" title="Tam Ekran" onclick="toggleFullscreenViz('vizBox4')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
+        </div>
+        <div id="groundingProofExplorer" class="chart-body scrollable-body"></div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Modal 1: Stres Testi (Benchmark) -->
+  <div id="benchmarkModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <div>
+            <h3>TrustLab Doğrulama &amp; Stres Testi</h3>
+            <span class="modal-sub">Deterministic Zero-Hallucination SLA • Circuit Breaker • GPU DirectML</span>
+          </div>
+        </div>
+        <button class="btn-close" onclick="closeBenchmarkModal()">✕</button>
       </div>
 
       <div class="modal-body">
-        <div class="benchmark-summary-bar">
-          <div class="stat-card">
-            <span class="stat-label">GENEL GEÇME ORANI</span>
-            <span id="bmPassRate" class="stat-val green">---</span>
+        <div class="benchmark-stats">
+          <div class="stat-box">
+            <span class="stat-label">Geçme Oranı</span>
+            <span id="bmPassRate" class="stat-num success">---</span>
           </div>
-          <div class="stat-card">
-            <span class="stat-label">SADAKAT (FAITHFULNESS)</span>
-            <span id="bmFaithfulness" class="stat-val cyan">---</span>
+          <div class="stat-box">
+            <span class="stat-label">Olgusal Sadakat</span>
+            <span id="bmFaithfulness" class="stat-num info">---</span>
           </div>
-          <div class="stat-card">
-            <span class="stat-label">TOPLAM C# SÜRESİ</span>
-            <span id="bmTotalTime" class="stat-val">---</span>
+          <div class="stat-box">
+            <span class="stat-label">Toplam Süre</span>
+            <span id="bmTotalTime" class="stat-num">---</span>
           </div>
-          <div class="stat-card">
-            <span class="stat-label">RTX 4060 Ti GPU HIZI</span>
-            <span id="bmGpuSpeed" class="stat-val yellow">---</span>
+          <div class="stat-box">
+            <span class="stat-label">GPU Rerank Hızı</span>
+            <span id="bmGpuSpeed" class="stat-num warning">---</span>
           </div>
         </div>
 
-        <div class="cases-table-container">
-          <table class="benchmark-table">
+        <div class="table-wrapper">
+          <table class="data-table">
             <thead>
               <tr>
-                <th>Test Kodu</th>
-                <th>Senaryo / Amaç</th>
-                <th>Sorgu & Durum</th>
+                <th>Kod</th>
+                <th>Senaryo</th>
+                <th>Sorgu</th>
                 <th>Sadakat</th>
                 <th>Süre</th>
-                <th>Sonuç Kararı</th>
+                <th>Karar</th>
               </tr>
             </thead>
             <tbody id="benchmarkCasesTbody">
-              <tr><td colspan="6" style="text-align:center; padding: 2rem;">Testi başlatmak için "Testi Çalıştır" butonuna basın...</td></tr>
+              <tr><td colspan="6" class="text-center text-muted">Testi başlatmak için butona tıklayın.</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div class="modal-footer">
-        <button id="runBenchmarkBtn" class="primary-btn pulse-anim" onclick="runLiveBenchmark()">🚀 Testi Başlat (Canlı 4 Ajan Koşusu)</button>
+        <button id="runBenchmarkBtn" class="btn btn-primary" onclick="runLiveBenchmark()">
+          <span>Testleri Çalıştır (4 Senaryo)</span>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Chunk Explorer Modal Window -->
-  <div id="chunksModal" class="benchmark-modal-backdrop" style="display: none;">
-    <div class="benchmark-modal-card" style="max-width: 900px;">
+  <!-- Modal 2: Chunks Explorer -->
+  <div id="chunksModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card modal-lg">
       <div class="modal-header">
-        <div class="modal-title-box">
-          <span class="lab-icon">📑</span>
+        <div class="modal-title-wrap">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+          </div>
           <div>
-            <h3 id="chunksModalTitle">PDF / Doküman Chunk Ayrıştırma İnceleyicisi</h3>
-            <span id="chunksModalSub" class="modal-sub">Metin parçaları, sayfa etiketleri ve token istatistikleri</span>
+            <h3 id="chunksModalTitle">Doküman Chunk Ayrıştırma İnceleyicisi</h3>
+            <span id="chunksModalSub" class="modal-sub">Metin parçaları ve token dağılımı</span>
           </div>
         </div>
-        <button class="modal-close-btn" onclick="closeChunksModal()">✕</button>
+        <button class="btn-close" onclick="closeChunksModal()">✕</button>
       </div>
 
       <div class="modal-body">
-        <div class="cases-table-container">
-          <table class="benchmark-table">
+        <div class="table-wrapper">
+          <table class="data-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Bölüm / Sayfa</th>
-                <th>Karakter / Boyut</th>
-                <th>Ayrıştırılmış Chunk İçeriği</th>
+                <th style="width: 40px;">#</th>
+                <th style="width: 140px;">Bölüm / Sayfa</th>
+                <th style="width: 100px;">Boyut</th>
+                <th>Chunk İçeriği</th>
               </tr>
             </thead>
             <tbody id="chunksTableTbody">
-              <tr><td colspan="4" style="text-align:center; padding: 2rem; color:#64748b;">Henüz bir doküman yüklenmedi.</td></tr>
+              <tr><td colspan="4" class="text-center text-muted">Henüz bir doküman yüklenmedi.</td></tr>
             </tbody>
           </table>
         </div>
@@ -420,32 +547,113 @@ Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gere
     </div>
   </div>
 
-  <!-- Source Document Line Viewer Modal Window -->
-  <div id="sourceDocModal" class="benchmark-modal-backdrop" style="display: none;">
-    <div class="benchmark-modal-card" style="max-width: 1000px; height: 86vh;">
+  <!-- Modal 3: Source Document Viewer -->
+  <div id="sourceDocModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card modal-xl">
       <div class="modal-header">
-        <div class="modal-title-box">
-          <span class="lab-icon">📖</span>
+        <div class="modal-title-wrap">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+            </svg>
+          </div>
           <div>
-            <h3 id="sourceDocModalTitle">Kaynak PDF Doküman İnceleyicisi</h3>
-            <span id="sourceDocModalSub" class="modal-sub">Vurgulanan cümlenin PDF'teki tam satırı ve paragraf konumu</span>
+            <h3 id="sourceDocModalTitle">Kaynak Doküman İnceleyicisi</h3>
+            <span id="sourceDocModalSub" class="modal-sub">Vurgulanan cümlenin tam satır ve paragraf konumu</span>
           </div>
         </div>
-        <button class="modal-close-btn" onclick="closeSourceDocModal()">✕</button>
+        <button class="btn-close" onclick="closeSourceDocModal()">✕</button>
       </div>
 
-      <div class="modal-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
-        <div class="doc-viewer-toolbar">
-          <span id="docViewerTargetBadge" class="doc-target-badge">📍 Hedef: Satır #1</span>
-          <span class="doc-target-tip">💡 Eşleşen satır altın sarısı ile parlar ve sayfa otomatik olarak o satıra kaydırılır.</span>
+      <div class="modal-body doc-viewer-body">
+        <div class="doc-toolbar">
+          <span id="docViewerTargetBadge" class="doc-target-badge">Hedef: Satır #1</span>
+          <span class="doc-target-hint">Eşleşen satır otomatik olarak vurgulanmıştır.</span>
         </div>
-        <div id="sourceDocLinesContainer" class="doc-lines-viewer">
-          <!-- Lines rendered dynamically with line numbers -->
+        <div id="sourceDocLinesContainer" class="doc-lines-view">
+          <!-- Lines rendered dynamically -->
         </div>
       </div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <!-- Modal 4: Persistent SQLite Corpus Manager -->
+  <div id="corpusModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+          </div>
+          <div>
+            <h3>Kalıcı Korpus &amp; Doküman Havuzu (SQLite)</h3>
+            <span id="corpusModalSub" class="modal-sub">Veritabanına kaydedilen dokümanlar sunucu kapansa dahi saklanır</span>
+          </div>
+        </div>
+        <button class="btn-close" onclick="closeCorpusModal()">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Modal Multi-Upload Dropzone -->
+        <div class="modal-dropzone" id="modalDropzone" onclick="document.getElementById('modalCorpusFileInput').click()">
+          <input type="file" id="modalCorpusFileInput" style="display:none;" multiple accept=".pdf,.txt,.md,.json,.csv" onchange="handleFileSelected(event)">
+          <div class="modal-drop-content">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/>
+              <line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+            <div>
+              <strong style="color: var(--primary);">+ Toplu PDF / Doküman Yükle (Çoklu Dosya Seçimi)</strong>
+              <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 2px;">Birden fazla PDF seçip bırakabilirsiniz; hepsi ayrıştırılıp SQLite veritabanına kaydedilir.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="corpus-stats-bar" style="margin-top: 0.85rem;">
+          <div class="corpus-stat-item">
+            <span class="stat-label">Toplam Belge:</span>
+            <strong id="corpusStatDocs">0</strong>
+          </div>
+          <div class="corpus-stat-item">
+            <span class="stat-label">Toplam Chunk:</span>
+            <strong id="corpusStatChunks">0</strong>
+          </div>
+          <div class="corpus-stat-item">
+            <span class="stat-label">Toplam Karakter:</span>
+            <strong id="corpusStatChars">0</strong>
+          </div>
+          <button class="btn btn-outline btn-sm text-danger" onclick="clearEntireCorpus()">
+            Tüm Havuzu Sıfırla
+          </button>
+        </div>
+
+        <div class="table-wrapper" style="margin-top: 0.85rem;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Doküman Adı</th>
+                <th style="width: 80px;">Sayfa</th>
+                <th style="width: 90px;">Chunk</th>
+                <th style="width: 100px;">Boyut</th>
+                <th style="width: 140px;">Yükleme Tarihi</th>
+                <th style="width: 70px; text-align: center;">İşlem</th>
+              </tr>
+            </thead>
+            <tbody id="corpusTableTbody">
+              <tr><td colspan="6" class="text-center text-muted">Henüz kalıcı veritabanında doküman bulunmuyor.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260831_3"></script>
 </body>
 </html>

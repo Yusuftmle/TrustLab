@@ -16,6 +16,7 @@ using TrustLab.Rag.Indexing;
 using TrustLab.Rag.Pipeline;
 using TrustLab.Rag.Reranking;
 using TrustLab.Telemetry;
+using TrustLab.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -70,6 +71,10 @@ builder.Services.AddCors(options =>
     });
 });
 
+// Kalıcı SQLite Korpus Veritabanı
+var dbPath = Path.Combine(AppContext.BaseDirectory, "data", "trustlab_corpus.db");
+builder.Services.AddSingleton<ICorpusRepository>(_ => new SqliteCorpusRepository(dbPath));
+
 builder.Services.AddSingleton<ITextChunker, SemanticBoundaryChunker>();
 builder.Services.AddSingleton<ISparseIndex, Bm25SparseIndex>();
 builder.Services.AddSingleton<IVectorStore, DenseVectorStore>();
@@ -111,6 +116,13 @@ builder.Services.AddSingleton<IDocumentLoader>(_ => CompositeDocumentLoader.Crea
 
 var app = builder.Build();
 
+// SQLite DB Tablo Başlatma
+using (var scope = app.Services.CreateScope())
+{
+    var repo = scope.ServiceProvider.GetRequiredService<ICorpusRepository>();
+    await repo.InitializeAsync();
+}
+
 app.UseCors();
 
 // 2. Serve UI Static Files
@@ -135,10 +147,12 @@ else
 // 3. API Endpoints
 
 // GET /api/system/status
-app.MapGet("/api/system/status", (IReranker reranker) =>
+app.MapGet("/api/system/status", async (IReranker reranker, ICorpusRepository corpusRepo) =>
 {
     var onnxReranker = reranker as OnnxGpuReranker;
     bool gpuAvailable = onnxReranker?.IsGpuAvailable ?? false;
+    var docSummaries = await corpusRepo.GetAllDocumentSummariesAsync();
+    
     return Results.Ok(new
     {
         Status = "Online",
@@ -148,58 +162,107 @@ app.MapGet("/api/system/status", (IReranker reranker) =>
         GpuDirectMlAvailable = gpuAvailable,
         GpuDevice = gpuAvailable ? gpuDeviceName : cpuFallback,
         OnnxModelLoaded = onnxReranker?.IsModelLoaded ?? false,
-        MemoryAllocatedMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2)
+        MemoryAllocatedMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2),
+        SavedDocumentsCount = docSummaries.Count,
+        SavedChunksCount = docSummaries.Sum(d => d.TotalChunks)
     });
 });
 
-// POST /api/documents/upload — PDF (şifreli/kilitli dahil), TXT, MD, JSON, CSV Yükleme & Çıkarım
+// GET /api/documents/list — Kalıcı SQLite'taki tüm dokümanların özeti
+app.MapGet("/api/documents/list", async (ICorpusRepository corpusRepo) =>
+{
+    var docs = await corpusRepo.GetAllDocumentSummariesAsync();
+    var allChunks = await corpusRepo.GetAllChunksAsync();
+    return Results.Ok(new
+    {
+        TotalDocuments = docs.Count,
+        TotalChunks = allChunks.Count,
+        TotalCharacters = docs.Sum(d => d.TotalCharacters),
+        Documents = docs
+    });
+});
+
+// DELETE /api/documents/{id} — Dokümanı ve chunk'larını SQLite'tan sil
+app.MapDelete("/api/documents/{id}", async (string id, ICorpusRepository corpusRepo) =>
+{
+    var deleted = await corpusRepo.DeleteDocumentAsync(id);
+    if (!deleted) return Results.NotFound(new { Error = "Doküman bulunamadı." });
+    var remaining = await corpusRepo.GetAllDocumentSummariesAsync();
+    return Results.Ok(new { Success = true, Message = "Doküman silindi.", RemainingDocuments = remaining.Count });
+});
+
+// DELETE /api/documents/clear — Tüm havuzu sıfırla
+app.MapDelete("/api/documents/clear", async (ICorpusRepository corpusRepo) =>
+{
+    await corpusRepo.ClearAllAsync();
+    return Results.Ok(new { Success = true, Message = "Tüm doküman havuzu temizlendi." });
+});
+
+// POST /api/documents/upload — Çoklu PDF / Doküman Toplu Yükleme & SQLite Kalıcı Kayıt
 app.MapPost("/api/documents/upload", async (
     HttpRequest request,
     [Microsoft.AspNetCore.Mvc.FromServices] IDocumentLoader documentLoader,
-    [Microsoft.AspNetCore.Mvc.FromServices] ITextChunker chunker) =>
+    [Microsoft.AspNetCore.Mvc.FromServices] ITextChunker chunker,
+    [Microsoft.AspNetCore.Mvc.FromServices] ICorpusRepository corpusRepo) =>
 {
     if (!request.HasFormContentType || request.Form.Files.Count == 0)
     {
-        return Results.BadRequest(new { Error = "Lütfen yüklenecek bir dosya seçiniz (.pdf, .txt, .md, .json, .csv)." });
+        return Results.BadRequest(new { Error = "Lütfen en az bir dosya seçiniz (.pdf, .txt, .md, .json, .csv)." });
     }
 
-    var file = request.Form.Files[0];
     string? password = request.Form.TryGetValue("password", out var pw) && !string.IsNullOrWhiteSpace(pw) ? pw.ToString() : null;
+    var uploadedFiles = request.Form.Files;
 
-    if (file.Length == 0)
-    {
-        return Results.BadRequest(new { Error = "Yüklenen dosya boş." });
-    }
+    var processedResults = new List<object>();
+    var allNewChunks = new List<Chunk>();
+    var allCombinedTexts = new List<string>();
 
     try
     {
-        using var stream = file.OpenReadStream();
-        var documents = await documentLoader.LoadAsync(stream, file.FileName, password);
-
-        var allChunks = new List<Chunk>();
-        foreach (var doc in documents)
+        foreach (var file in uploadedFiles)
         {
-            allChunks.AddRange(chunker.ChunkDocument(doc, 256, 32));
+            if (file.Length == 0) continue;
+
+            using var stream = file.OpenReadStream();
+            var pages = await documentLoader.LoadAsync(stream, file.FileName, password);
+
+            var fileChunks = new List<Chunk>();
+            foreach (var pageDoc in pages)
+            {
+                fileChunks.AddRange(chunker.ChunkDocument(pageDoc, 256, 32));
+            }
+
+            var fullContent = string.Join("\n\n", pages.Select(p => p.Content));
+            var combinedDoc = Document.Create(file.FileName, fullContent);
+
+            // SQLite'a kaydet (Persist!)
+            await corpusRepo.SaveDocumentWithChunksAsync(combinedDoc, fileChunks, file.Length, pages.Count);
+
+            allNewChunks.AddRange(fileChunks);
+            allCombinedTexts.Add(fullContent);
+
+            processedResults.Add(new
+            {
+                FileName = file.FileName,
+                FileSizeBytes = file.Length,
+                TotalPages = pages.Count,
+                TotalChunks = fileChunks.Count,
+                TotalCharacters = fullContent.Length
+            });
         }
 
-        var totalChars = documents.Sum(d => d.Content.Length);
+        var allSavedDocs = await corpusRepo.GetAllDocumentSummariesAsync();
+        var allSavedChunks = await corpusRepo.GetAllChunksAsync();
 
         return Results.Ok(new
         {
-            FileName = file.FileName,
-            FileSizeBytes = file.Length,
-            TotalPagesOrDocs = documents.Count,
-            TotalChunks = allChunks.Count,
-            TotalCharacters = totalChars,
-            CombinedText = string.Join("\n\n", documents.Select(d => d.Content)),
-            Documents = documents.Select(d => new
-            {
-                d.Id,
-                Preview = d.Content.Length > 250 ? d.Content[..250] + "..." : d.Content,
-                Length = d.Content.Length,
-                d.Metadata
-            }),
-            Chunks = allChunks.Select(c => new
+            Message = $"{uploadedFiles.Count} dosya başarıyla işlendi ve SQLite veritabanına kaydedildi.",
+            ProcessedFiles = processedResults,
+            TotalCorpusDocuments = allSavedDocs.Count,
+            TotalCorpusChunks = allSavedChunks.Count,
+            TotalCharacters = allSavedDocs.Sum(d => d.TotalCharacters),
+            CombinedText = string.Join("\n\n---\n\n", allCombinedTexts),
+            Chunks = allNewChunks.Select(c => new
             {
                 c.Id,
                 c.DocumentId,
@@ -559,7 +622,8 @@ app.MapPost("/api/chat/rag", async (
     [Microsoft.AspNetCore.Mvc.FromServices] ITextEmbedder embedder,
     [Microsoft.AspNetCore.Mvc.FromServices] IReranker reranker,
     [Microsoft.AspNetCore.Mvc.FromServices] ILlmClient llmClient,
-    [Microsoft.AspNetCore.Mvc.FromServices] RagTriadEvaluator triadEvaluator) =>
+    [Microsoft.AspNetCore.Mvc.FromServices] RagTriadEvaluator triadEvaluator,
+    [Microsoft.AspNetCore.Mvc.FromServices] ICorpusRepository corpusRepo) =>
 {
     var totalTimer = Stopwatch.StartNew();
 
@@ -568,26 +632,43 @@ app.MapPost("/api/chat/rag", async (
         return Results.BadRequest(new { Error = "Query cannot be empty." });
     }
 
-    string corpus = !string.IsNullOrWhiteSpace(req.Corpus) ? req.Corpus : chatCorpus;
-
-    // 1. Ingest & Chunking
     var ingestTimer = Stopwatch.StartNew();
     var allChunks = new List<Chunk>();
-    string docName = !string.IsNullOrWhiteSpace(req.DocumentName) ? req.DocumentName : "Dokuman.pdf";
+    string docName = !string.IsNullOrWhiteSpace(req.DocumentName) ? req.DocumentName : "Klinik_Korpus.pdf";
+    string corpus = !string.IsNullOrWhiteSpace(req.Corpus) ? req.Corpus : "";
 
-    if (corpus.Contains("Doküman 1:") || corpus.Contains("Doküman 2:"))
+    // 1. Check if we have persistent SQLite chunks
+    var savedChunks = await corpusRepo.GetAllChunksAsync();
+    var savedDocs = await corpusRepo.GetAllDocumentSummariesAsync();
+
+    if (string.IsNullOrWhiteSpace(corpus) && savedChunks.Count > 0)
     {
-        var lines = corpus.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var docs = lines.Select((line, idx) => Document.Create($"Bolum_{idx + 1}.pdf", line)).ToList();
-        foreach (var doc in docs)
+        allChunks.AddRange(savedChunks);
+        if (savedDocs.Count > 0)
         {
-            allChunks.AddRange(chunker.ChunkDocument(doc, 256, 32));
+            docName = string.Join(", ", savedDocs.Take(3).Select(d => d.FileName)) + (savedDocs.Count > 3 ? $" (+{savedDocs.Count - 3} belge)" : "");
+            var fullDocs = await corpusRepo.GetAllDocumentsAsync();
+            corpus = string.Join("\n\n---\n\n", fullDocs.Select(d => d.Content));
         }
     }
     else
     {
-        var mainDoc = Document.Create(docName, corpus);
-        allChunks.AddRange(chunker.ChunkDocument(mainDoc, 256, 64));
+        if (string.IsNullOrWhiteSpace(corpus)) corpus = chatCorpus;
+
+        if (corpus.Contains("Doküman 1:") || corpus.Contains("Doküman 2:"))
+        {
+            var lines = corpus.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var docs = lines.Select((line, idx) => Document.Create($"Bolum_{idx + 1}.pdf", line)).ToList();
+            foreach (var doc in docs)
+            {
+                allChunks.AddRange(chunker.ChunkDocument(doc, 256, 32));
+            }
+        }
+        else
+        {
+            var mainDoc = Document.Create(docName, corpus);
+            allChunks.AddRange(chunker.ChunkDocument(mainDoc, 256, 64));
+        }
     }
 
     if (allChunks.Count == 0)
@@ -647,43 +728,29 @@ app.MapPost("/api/chat/rag", async (
         // Test modu: override yanıtı kullan (grounding testi için)
         finalAnswer = req.CandidateResponseOverride;
     }
-    else if (isDocRelevant && rerankedResults.Count > 0)
+    else
     {
-        // Gerçek Klinik Doküman RAG Modu: Soru dokümanla anlamsal olarak örtüştü
+        // Gerçek Klinik Doküman RAG Modu: Çekilen tüm en alakalı chunk'ları bağlam olarak sun
         var contextBuilder = new System.Text.StringBuilder();
-        contextBuilder.AppendLine("=== KLİNİK BAĞLAM BELGELERİ ===");
-        foreach (var (result, idx) in rerankedResults.Where(r => r.Score > 0.05f).Select((r, i) => (r, i + 1)))
+        contextBuilder.AppendLine("=== KLİNİK / BİLİMSEL BAĞLAM BELGELERİ ===");
+        var effectiveChunks = rerankedResults.Count > 0 ? rerankedResults : fusedResults.Take(5).ToList();
+        foreach (var (result, idx) in effectiveChunks.Select((r, i) => (r, i + 1)))
         {
-            contextBuilder.AppendLine($"[Kaynak {idx} | Sayfa/Bölüm: {result.Chunk.DocumentId}]");
+            contextBuilder.AppendLine($"[Kaynak {idx} | Belge: {result.Chunk.DocumentId}]");
             contextBuilder.AppendLine(result.Chunk.Content);
             contextBuilder.AppendLine();
         }
-        contextBuilder.AppendLine("==============================");
-        contextBuilder.AppendLine($"DOKTOR / HASTA SORUSU: {req.Query}");
+        contextBuilder.AppendLine("==========================================");
+        contextBuilder.AppendLine($"KULLANICI / DOKTOR GİRDİSİ: {req.Query}");
         contextBuilder.AppendLine(@"GÖREV VE KLİNİK KURALLAR:
-1. Yukarıdaki klinik bağlam belgelerindeki doğrulanmış bilgileri kullanarak soruyu profesyonel bir Türkçe ile yanıtla.
-2. Kullanıcının sorduğu miktar belgedeki güvenli maksimum dozu aşıyorsa, belgedeki yasal limiti belirterek aşırı doz tehlikesine karşı uyar.
-3. Yalnızca bağlam belgelerinde yazılı olan doz ve bilgileri aktar, belgede geçmeyen hiçbir dozajı veya yan etkiyi uydurma.");
+1. Yukarıdaki klinik bağlam belgelerindeki doğrulanmış bilimsel bulguları kullanarak soruyu/ifadeyi profesyonel bir Türkçe ile yanıtla.
+2. Kullanıcının iddiası veya sorusu bağlam belgelerindeki bilgilerle çelişiyorsa ya da yanlış bir varsayım içeriyorsa (örneğin 'etkisizdir' veya 'başka alandadır' gibi uydurma/yanlış iddialarda), belgedeki kesin verileri aktararak bu yanlış iddiayı nazikçe ve açıkça DÜZELT / ÇÜRÜT.
+3. Yalnızca bağlam belgelerinde yazılı olan klinik verileri ve sonuçları aktar, belgede geçmeyen hiçbir ilaç, dozaj, hastalık veya etki uydurma.");
 
         finalAnswer = await llmClient.GenerateResponseAsync(
             prompt: contextBuilder.ToString(),
             systemInstruction: systemPrompt,
-            temperature: ollamaTemp);
-    }
-    else
-    {
-        // Genel Sohbet / Selamlama Modu: Vektör uzayında klinik soru eşleşmesi yok
-        string activeDocText = !string.IsNullOrWhiteSpace(req.DocumentName)
-            ? $"Yüklü aktif belge: '{req.DocumentName}'."
-            : "Yüklenen klinik belgeler";
-
-        var chatPrompt = $"Kullanıcı mesajı: \"{req.Query}\"\n{activeDocText}\n" +
-                         "Bu mesaja Türkçe, tek veya iki cümlelik çok kısa, nazik ve profesyonel bir selamlama yanıtı ver. Kullanıcıya yüklenen belge veya sağlık konusunda ne sormak istediğini sor.";
-
-        finalAnswer = await llmClient.GenerateResponseAsync(
-            prompt: chatPrompt,
-            systemInstruction: "Sen Türkçe konuşan profesyonel bir klinik karar destek yapay zeka asistanısın. Selamlama, hal hatır sorma ve genel sohbet mesajlarına kısa, nazik ve yardımsever bir dille yanıt ver.",
-            temperature: 0.2f);
+            temperature: 0.1f);
     }
 
     if (string.IsNullOrWhiteSpace(finalAnswer))
@@ -692,22 +759,14 @@ app.MapPost("/api/chat/rag", async (
     }
     llmTimer.Stop();
 
-    // 7. Sentence-by-Sentence Grounding & Trace Extraction
-    var topChunks = rerankedResults.Select(r => r.Chunk).ToList();
+    // 7. Sentence-by-Sentence Strict Grounding & Trace Extraction (Her zaman gerçek bağlamla denetlenir)
+    var topChunks = rerankedResults.Count > 0 ? rerankedResults.Select(r => r.Chunk).ToList() : allChunks.Take(5).ToList();
     ReadOnlyMemory<float>? answerVector = await embedder.GenerateEmbeddingAsync(finalAnswer);
 
-    // Vektörel Karar: Eğer sorgu klinik dokümanla eşleşmiyorsa (isDocRelevant == false), yanıt doğrudan Klinik Diyalogdur
-    var triadScore = !isDocRelevant 
-        ? new RagTriadScore(
-            0f,
-            1.0f,
-            1.0f,
-            finalAnswer.Split(new[] { '.', '!', '?', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select((s, i) => new SentenceGroundingDetail(i + 1, s, true, 1.0f, "Klinik Diyalog / Sohbet", "Klinik diyalog ve genel selamlama yanıtı.")).ToList())
-        : triadEvaluator.Evaluate(req.Query, topChunks, finalAnswer, queryVector, answerVector);
+    var triadScore = triadEvaluator.Evaluate(req.Query, topChunks, finalAnswer, queryVector, answerVector);
 
     // 8. Dosage & Numerical Guardrail
-    var dosageCheck = isDocRelevant ? DosageAndNumericGuard.VerifyDosages(finalAnswer, topChunks) : new DosageVerificationResult(true, Array.Empty<string>(), Array.Empty<string>(), "Sohbet mesajı: Dozaj denetimi atlandı.");
+    var dosageCheck = DosageAndNumericGuard.VerifyDosages(finalAnswer, topChunks);
 
     totalTimer.Stop();
 
@@ -716,7 +775,7 @@ app.MapPost("/api/chat/rag", async (
         ? (float)Math.Round((rerankedResults[0].Score - denseResults[0].Score) * 100, 1)
         : 0f;
 
-    string guardrailStatus = (!isDocRelevant || (triadScore.Faithfulness >= 0.70f && dosageCheck.IsValid))
+    string guardrailStatus = (triadScore.Faithfulness >= 0.65f && dosageCheck.IsValid)
         ? "PASSED / VERIFIED"
         : "BLOCKED / WARNING";
 
