@@ -6,7 +6,7 @@
 // ==========================================================================
 // 1. STATE & CONSTANTS
 // ==========================================================================
-const API_BASE = "http://localhost:5000";
+const API_BASE = window.location.origin || "";
 
 const state = {
   activeView: 'lab', // default to lab/scientific view or chat
@@ -227,6 +227,22 @@ function updateParams() {
   document.getElementById('rerankThresholdVal').textContent = document.getElementById('rerankThresholdRange').value;
   document.getElementById('embedDimVal').textContent = document.getElementById('embedDimRange').value + "D";
   executeFullPipeline();
+}
+
+async function syncDbCorpusToLab() {
+  try {
+    const data = await api.getDocuments();
+    if (data && data.documents && data.documents.length > 0) {
+      document.getElementById('corpusInput').value = "SQLITE_DB";
+      document.getElementById('queryInput').value = "Malign perikardiyal efüzyon (MPE) tanısında BT kesim değeri kaç HU'dur?";
+      document.getElementById('candidateResponseInput').value = "MPE tanısı için BT attenuasyonu kesim değeri 16.45 HU olarak belirlendi (%88.2 duyarlılık).";
+      await executeFullPipeline();
+    } else {
+      alert("SQLite veritabanında henüz kayıtlı doküman bulunmuyor.");
+    }
+  } catch (err) {
+    console.error("Sync error:", err);
+  }
 }
 
 // ==========================================================================
@@ -697,10 +713,16 @@ function handleChatKeyDown(e) {
 
 function sendQuickPrompt(type) {
   const input = document.getElementById('chatInputText');
-  if (type === 'penicillin') {
-    input.value = "Penisilin alerjisi olan hastada Amoksisilin kullanılabilir mi? Alternatifi nedir?";
-  } else if (type === 'paracetamol') {
-    input.value = "Yetişkin bir hastada parasetamolün günlük maksimum dozu kaç mg'dır?";
+  if (type === 'mpe_hu') {
+    input.value = "Malign perikardiyal efüzyon (MPE) tanısında Bilgisayarlı Tomografi (BT) attenüasyonu için belirlenen optimal cut-off (kesim) değeri kaç Hounsfield Ünitesidir (HU)?";
+  } else if (type === 'dkc_tlf') {
+    input.value = "Bifürkasyon lezyonlarında DKC tekniği ile Mini-Culotte tekniğinin 3 yıllık TLF (Target Lesion Failure) oranları ve p-değeri nedir?";
+  } else if (type === 'cabg_pni') {
+    input.value = "CABG (Koroner Bypass) ameliyatında ameliyat öncesi ve sonrası PNI beslenme indeksi mortaliteyi nasıl etkiler?";
+  } else if (type === 'covid_vaccine') {
+    input.value = "COVID-19 aşıları (mRNA veya inaktif) ciddi koroner arter hastalığı (CAD) riskini artırır mı?";
+  } else if (type === 'paracetamol_alcohol') {
+    input.value = "Alkol alan bir hastada günlük maksimum Parol (parasetamol) dozu kaç mg olmalıdır?";
   } else if (type === 'hallucination_test') {
     input.value = "Penisilin alerjisinde hastaya günde 2000mg Amoksisilin verilmesi güvenli midir?";
   }
@@ -745,8 +767,8 @@ async function sendChatMessage() {
 
   // 3. API Call
   try {
-    const corpusInput = document.getElementById('corpusInput');
-    const corpusVal = corpusInput ? corpusInput.value.trim() : (state.uploadedCorpus || '');
+    // Chat modunda kullanıcı özel bir dosya yüklemediyse persistent SQLite korpusu (5 PDF / 215 chunk) kullanılır
+    const corpusVal = state.uploadedCorpus || '';
     const docName = state.uploadedDocName || (corpusVal ? "Yuklenen_Dokuman.pdf" : "Klinik_Korpus.pdf");
 
     const data = await api.sendChat(query, corpusVal, docName);

@@ -284,42 +284,55 @@ app.MapPost("/api/lab/evaluate", async (
     [Microsoft.AspNetCore.Mvc.FromServices] ITextChunker chunker,
     [Microsoft.AspNetCore.Mvc.FromServices] ITextEmbedder embedder,
     [Microsoft.AspNetCore.Mvc.FromServices] IReranker reranker,
-    [Microsoft.AspNetCore.Mvc.FromServices] RagTriadEvaluator triadEvaluator) =>
+    [Microsoft.AspNetCore.Mvc.FromServices] RagTriadEvaluator triadEvaluator,
+    [Microsoft.AspNetCore.Mvc.FromServices] ICorpusRepository corpusRepo) =>
 {
     var totalTimer = Stopwatch.StartNew();
 
-    if (string.IsNullOrWhiteSpace(req.Query) || string.IsNullOrWhiteSpace(req.Corpus))
+    if (string.IsNullOrWhiteSpace(req.Query))
     {
-        return Results.BadRequest(new { Error = "Query and Corpus cannot be empty." });
+        return Results.BadRequest(new { Error = "Query cannot be empty." });
     }
 
-    // 1. Ingestion & Chunking
+    // 1. Ingestion & Chunking (SQLite DB Fallback if Corpus is empty or special flag)
     var ingestTimer = Stopwatch.StartNew();
     var allChunks = new List<Chunk>();
     var docs = new List<Document>();
     int maxTokens = req.MaxTokensPerChunk > 0 ? req.MaxTokensPerChunk : 256;
     int overlapTokens = req.OverlapTokens >= 0 && req.OverlapTokens < maxTokens ? req.OverlapTokens : 32;
 
-    if (req.Corpus.Contains("Doküman 1:") || req.Corpus.Contains("Doküman 2:"))
+    if (string.IsNullOrWhiteSpace(req.Corpus) || req.Corpus.Trim() == "SQLITE_DB")
     {
-        var lines = req.Corpus.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        docs = lines.Select((line, idx) => Document.Create($"doc_{idx + 1}", line)).ToList();
-        foreach (var doc in docs)
+        var savedChunks = await corpusRepo.GetAllChunksAsync();
+        if (savedChunks.Count > 0)
         {
-            allChunks.AddRange(chunker.ChunkDocument(doc, maxTokens, overlapTokens));
+            allChunks.AddRange(savedChunks);
         }
     }
-    else
+
+    if (allChunks.Count == 0 && !string.IsNullOrWhiteSpace(req.Corpus))
     {
-        var mainDoc = Document.Create("uploaded_doc", req.Corpus);
-        docs.Add(mainDoc);
-        allChunks.AddRange(chunker.ChunkDocument(mainDoc, maxTokens, overlapTokens));
+        if (req.Corpus.Contains("Doküman 1:") || req.Corpus.Contains("Doküman 2:"))
+        {
+            var lines = req.Corpus.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            docs = lines.Select((line, idx) => Document.Create($"doc_{idx + 1}", line)).ToList();
+            foreach (var doc in docs)
+            {
+                allChunks.AddRange(chunker.ChunkDocument(doc, maxTokens, overlapTokens));
+            }
+        }
+        else
+        {
+            var mainDoc = Document.Create("uploaded_doc", req.Corpus);
+            docs.Add(mainDoc);
+            allChunks.AddRange(chunker.ChunkDocument(mainDoc, maxTokens, overlapTokens));
+        }
     }
     ingestTimer.Stop();
 
     if (allChunks.Count == 0)
     {
-        return Results.Ok(new { Error = "No chunks created." });
+        return Results.BadRequest(new { Error = "Kütüphanede veya korpus alanında taranacak hiçbir chunk bulunamadı." });
     }
 
     // 2. BM25 Sparse Index
@@ -745,7 +758,12 @@ app.MapPost("/api/chat/rag", async (
         contextBuilder.AppendLine(@"GÖREV VE KLİNİK KURALLAR:
 1. Yukarıdaki klinik bağlam belgelerindeki doğrulanmış bilimsel bulguları kullanarak soruyu/ifadeyi profesyonel bir Türkçe ile yanıtla.
 2. Kullanıcının iddiası veya sorusu bağlam belgelerindeki bilgilerle çelişiyorsa ya da yanlış bir varsayım içeriyorsa (örneğin 'etkisizdir' veya 'başka alandadır' gibi uydurma/yanlış iddialarda), belgedeki kesin verileri aktararak bu yanlış iddiayı nazikçe ve açıkça DÜZELT / ÇÜRÜT.
-3. Yalnızca bağlam belgelerinde yazılı olan klinik verileri ve sonuçları aktar, belgede geçmeyen hiçbir ilaç, dozaj, hastalık veya etki uydurma.");
+3. Yalnızca bağlam belgelerinde yazılı olan klinik verileri ve sonuçları aktar, belgede geçmeyen hiçbir ilaç, dozaj, hastalık veya etki uydurma.
+4. İSTATİSTİKSEL KARŞILAŞTIRMALARDA VE TABLOLARDA KESİN DOĞRULAMA:
+   - Metinlerde geçen '[X (%oran) vs. Y (%oran)] sıklığı Z grubunda daha düşüktü' şeklindeki kalıplarda:
+     * İlk sayı (X) -> Birinci/Kontrol grubuna (örneğin Mini-Culotte / MC: %19.6 veya %25.0) aittir.
+     * İkinci sayı (Y) -> Daha düşük/başarılı olan hedef gruba (örneğin DKC: %5.6 veya %4.1) aittir.
+   - Sayısal mantık kontrolü yap: Eğer bir teknik 'daha iyi/üstün' ise, komplikasyon/başarısızlık (TLF) oranı mutlaka daha KÜÇÜK olan sayıdır. Asla büyük olan başarısızlık oranını üstün olan gruba atama.");
 
         finalAnswer = await llmClient.GenerateResponseAsync(
             prompt: contextBuilder.ToString(),

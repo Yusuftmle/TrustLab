@@ -107,8 +107,11 @@
           <span id="chatActiveDocBadge" class="context-pill">Klinik Korpus (Varsayılan)</span>
         </div>
         <div class="quick-prompts">
-          <button class="prompt-chip" onclick="sendQuickPrompt('penicillin')">Penisilin Kontrendikasyonu</button>
-          <button class="prompt-chip" onclick="sendQuickPrompt('paracetamol')">Parasetamol Dozajı</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('mpe_hu')">MPE &amp; BT (16.45 HU)</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('dkc_tlf')">DKC vs MC (3 Yıllık TLF)</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('cabg_pni')">CABG &amp; PNI İndeksi</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('covid_vaccine')">COVID-19 Aşısı &amp; Kalp</button>
+          <button class="prompt-chip" onclick="sendQuickPrompt('paracetamol_alcohol')">Alkol &amp; Parol Dozu</button>
           <button class="prompt-chip warning" onclick="sendQuickPrompt('hallucination_test')">Halüsinasyon Tuzağı</button>
         </div>
       </div>
@@ -350,13 +353,14 @@
 
       <!-- Corpus Card -->
       <div class="card">
-        <div class="card-header">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
           <h4>Doküman Korpusu</h4>
+          <button class="btn btn-outline btn-xs" id="syncDbCorpusBtn" onclick="syncDbCorpusToLab()" style="font-size: 0.7rem; padding: 0.2rem 0.5rem; color: #38bdf8; border-color: rgba(56,189,248,0.3);">⚡ SQLite Havuzunu Aktar</button>
         </div>
         <div class="card-body">
-          <textarea id="corpusInput" class="input-textarea" rows="4">Doküman 1: TrustLab mimarisi deterministik guardrail bileşenleri ile sıfır halüsinasyon hedefleyen C# .NET 10 araştırma motorudur.
-Doküman 2: Okapi BM25 sparse arama ve SIMD Cosine Similarity vektör benzerliği Reciprocal Rank Fusion ile birleştirilir.
-Doküman 3: İtalyan makarnası pişirirken suyun kaynaması ve tuzlanması gerekir.</textarea>
+          <textarea id="corpusInput" class="input-textarea" rows="4">Doküman 1: Şiddetli penisilin anafilaksi öyküsü olan hastalarda Amoksisilin kullanımı mutlak kontrendikedir. Alternatif olarak makrolid grubu antibiyotikler güvenle tercih edilebilir.
+Doküman 2: Parasetamol yetişkinlerde 6 saatte bir 500mg-1000mg aralığında kullanılır, günlük maksimum doz 4000mg'dır. Alkol alan hastalarda günlük doz 2000mg'ı aşmamalıdır.
+Doküman 3: Malign perikardiyal efüzyon (MPE) tanısında toraks BT attenüasyon kesim değeri 16.45 HU olup %88.2 duyarlılık ve %78.3 özgüllük sağlar.</textarea>
         </div>
       </div>
 
